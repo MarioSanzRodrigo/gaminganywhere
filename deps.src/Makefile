@@ -162,7 +162,7 @@ ffmpeg:
 		--extra-ldflags=-L$(GADEPS)/lib
 	make -C $(FFMPEGDIR) $(PARALLEL_MAKE)
 	make -C $(FFMPEGDIR) install
-	rm -rf $(FFMPEGDIR)
+	#rm -rf $(FFMPEGDIR)
 
 live555:
 	$(TGZUNPACK) $(LIVE555)
