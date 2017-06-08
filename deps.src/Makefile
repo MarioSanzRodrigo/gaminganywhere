@@ -44,12 +44,16 @@ osx_brew:
 	brew install --with-libvorbis --with-libvpx --with-opus \
 		--with-theora --with-x265 --with-tools ffmpeg
 
-linux_ubuntu:
-	@echo 'You will need root permissions to install packages'
-	sudo apt-get install libsdl2-dev libsdl2-ttf-dev yasm \
-			libmp3lame-dev libopus-dev libogg-dev \
-			libvorbis-dev libtheora-dev \
-			libvpx-dev libx264-dev libxvidcore-dev
+#//RAL { 
+# Comment: Remove automatic dependencies installation for Linux (recommend user to do this manually as desired)
+# At the exemption of FFmpeg, rest of libraries are compiled locally.
+linux_ubuntu: sdl2 sdl2_ttf yasm lame opus ogg vorbis theora vpx x264 xvid
+#	@echo 'You will need root permissions to install packages'
+#	sudo apt-get install libsdl2-dev libsdl2-ttf-dev yasm \
+#			libmp3lame-dev libopus-dev libogg-dev \
+#			libvorbis-dev libtheora-dev \
+#			libvpx-dev libx264-dev libxvidcore-dev
+#}
 
 sdl2:
 	$(TGZUNPACK) $(SDL2)
@@ -144,7 +148,7 @@ xvid:
 	rm -rf $(XVIDDIR)
 
 ffmpeg:
-	$(TBZUNPACK) $(FFMPEG)
+	#$(TBZUNPACK) $(FFMPEG) #//RAL: Remove FFmpeg unzip
 	cd $(FFMPEGDIR); ./configure --prefix=$(GADEPS) \
 		--enable-shared --enable-pic \
 		--enable-libmp3lame \
