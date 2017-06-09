@@ -132,6 +132,7 @@ void GAVideoLiveSource
 	if(newFrameDataStart == NULL)
 		return;
 	newFrameSize = pkt.size;
+	//printf("."); fflush(stdout); //RAL: comment-me
 #ifdef DISCRETE_FRAMER	// special handling for packets with startcode
 	if(remove_startcode != 0) {
 		if(newFrameDataStart[0] == 0
