@@ -646,7 +646,6 @@ watchdog_thread(void *args) {
 	//
 	rtsperror("watchdog: launched, waiting for audio/video frames ...\n");
 	//
-	return NULL; //RAL: comment-me // disable watchdog by the moment
 	while(true) {
 #ifdef WIN32
 		Sleep(1000);
