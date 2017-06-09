@@ -1554,7 +1554,8 @@ setupNextSubsession(RTSPClient* rtspClient) {
 
 	scs.subsession = scs.iter->next();
 	do if (scs.subsession != NULL) {
-		if (!scs.subsession->initiate()) {
+		printf("*** client ****\n"); fflush(stdout); //RAL: comment-me
+		if (!scs.subsession->initiate(0)) { //RAL: enable unknown SDP codec specifications
 			env << *rtspClient << "Failed to initiate the \"" << *scs.subsession << "\" subsession: " << env.getResultMsg() << "\n";
 			setupNextSubsession(rtspClient); // give up on this subsession; go to the next one
 		} else {
