@@ -983,7 +983,8 @@ struct ga_codec_entry ga_codec_table[] = {
 	{ "VP8", AV_CODEC_ID_VP8, "video/x-vnd.on2.vp8", { "libvpx", NULL } },
 	{ "MPA", AV_CODEC_ID_MP3, "audio/mpeg", { "mp3", NULL } },
 	{ "OPUS", AV_CODEC_ID_OPUS, "audio/opus", { "libopus", NULL } },
-	{ "LHE", AV_CODEC_ID_MLHE, "image/lhe", { "mlhe", NULL } },
+	{ "LHE", AV_CODEC_ID_LHE, "video/lhe", { "lhe", NULL } },
+	{ "MLHE", AV_CODEC_ID_MLHE, "video/mlhe", { "mlhe", NULL } },
 	{ NULL, AV_CODEC_ID_NONE, NULL, { NULL } } /* END */
 };
 
