@@ -41,7 +41,7 @@ liveserver_main(void *arg) {
 		exit(1);
 	}
 	//
-	encoder_pktqueue_init(VIDEO_SOURCE_CHANNEL_MAX+1, 3 * 1024* 1024/*3MB*/);
+	encoder_pktqueue_init(VIDEO_SOURCE_CHANNEL_MAX+1, 6 * 1024* 1024/*[MB]*/); //RAL: FIXME: generalize somehow
 	//
 	ServerMediaSession * sms
 		= ServerMediaSession::createNew(*env,
