@@ -50,6 +50,9 @@ unsigned increaseReceiveBufferTo(UsageEnvironment& env,
 #include <string.h>
 #include <list>
 #include <map>
+
+#include <cstdint>
+
 using namespace std;
 
 #ifndef	AVCODEC_MAX_AUDIO_FRAME_SIZE
@@ -134,6 +137,25 @@ static int packet_queue_initialized = 0;
 static int packet_queue_limit = 5;	// limit the queue size
 static int packet_queue_dropfactor = 2;	// default drop half
 static PacketQueue audioq;
+
+/* CRC-32C (iSCSI) polynomial in reversed bit order. */
+#define POLY 0x82f63b78
+
+/* CRC-32 (Ethernet, ZIP, etc.) polynomial in reversed bit order. */
+/* #define POLY 0xedb88320 */
+
+uint32_t crc32c(uint32_t crc, const unsigned char *buf, size_t len)
+{
+    int k;
+
+    crc = ~crc;
+    while (len--) {
+        crc ^= *buf++;
+        for (k = 0; k < 8; k++)
+            crc = crc & 1 ? (crc >> 1) ^ POLY : crc >> 1;
+    }
+    return ~crc;
+}
 
 void
 packet_queue_init(PacketQueue *q) {
@@ -789,6 +811,22 @@ play_video_priv(int ch/*channel*/, unsigned char *buffer, int bufsize, struct ti
 	if(drop_video_frame(ch, buffer, bufsize, pts)) {
 		return bufsize;
 	}
+	//{ //RAL: Check CRC32
+	// Check if it is LHE //TODO
+	if(buffer== NULL)
+		return bufsize;
+	if(vdecoder[ch] && (vdecoder[ch]->codec_id== AV_CODEC_ID_LHE ||
+			vdecoder[ch]->codec_id== AV_CODEC_ID_MLHE)) {
+		uint32_t crc32= buffer[bufsize- 4]<< 24;
+		crc32|= buffer[bufsize- 3]<< 16;
+		crc32|= buffer[bufsize- 2]<< 8;
+		crc32|= buffer[bufsize- 1];
+		//printf("crc_32:%u ", crc32); fflush(stdout); //comment-me
+		if(crc32c(0, buffer, bufsize- 4)!= crc32) {
+			printf("Inconsistent CRC-32 in pay-load.\n"); fflush(stdout);
+			return bufsize;
+		}
+	}
 	//
 #ifdef SAVE_ENC
 	if(fout != NULL) {
@@ -941,7 +979,7 @@ skip_frame:
 	return avpkt.size;
 }
 
-#define	PRIVATE_BUFFER_SIZE	1048576
+#define	PRIVATE_BUFFER_SIZE	2048000 //1048576 //RAL: //FIXME: generalize somehow
 
 struct decoder_buffer {
 	unsigned int privbuflen;
@@ -1015,6 +1053,15 @@ play_video(int channel, unsigned char *buffer, int bufsize, struct timeval pts, 
 	} else {
 	//////// Work with ffmpeg
 #endif
+	/*
+	 * RAL: Implementation note:
+	 * Interpretation on how frame boundaries are detected:
+	 * - If PTS changes, then we assume that a new frame is coming;
+	 * - If PTS is the same as previous, then we assume that we have a frame
+	 * fragment, so the "fragment" is attached at the end of the existent frame
+	 * buffer (marker indicates the last fragment of the frame);
+	 * - Else, buffer overflows.
+	 */
 	if(pts.tv_sec != pdb->lastpts.tv_sec
 	|| pts.tv_usec != pdb->lastpts.tv_usec) {
 		if(pdb->privbuflen > 0) {
@@ -1022,44 +1069,46 @@ play_video(int channel, unsigned char *buffer, int bufsize, struct timeval pts, 
 			//	lastpts.tv_sec, lastpts.tv_usec);
 			left = play_video_priv(channel, pdb->privbuf,
 				pdb->privbuflen, pdb->lastpts);
-			if(left > 0) {
-				bcopy(pdb->privbuf + pdb->privbuflen - left,
-					pdb->privbuf, left);
-				pdb->privbuflen = left;
-				rtsperror("decoder: %d bytes left, preserved for next round\n", left);
-			} else {
+			if(left> 0) printf("%s %d: frame dropped\n", __FILE__, __LINE__); fflush(stdout); //comment-me
+//			if(left > 0) {
+//				bcopy(pdb->privbuf + pdb->privbuflen - left,
+//					pdb->privbuf, left);
+//				pdb->privbuflen = left;
+//				rtsperror("decoder: %d bytes left, preserved for next round\n", left);
+//			} else {
 				pdb->privbuflen = 0;
-			}
+//			}
 		}
 		pdb->lastpts = pts;
 	}
 	if(pdb->privbuflen + bufsize <= PRIVATE_BUFFER_SIZE) {
 		bcopy(buffer, &pdb->privbuf[pdb->privbuflen], bufsize);
 		pdb->privbuflen += bufsize;
-		if(marker && pdb->privbuflen > 0) {
+		if(marker && pdb->privbuflen > 0) { //RAL: Note that marker bit marks the end of the stream
 			left = play_video_priv(channel, pdb->privbuf,
 				pdb->privbuflen, pdb->lastpts);
-			if(left > 0) {
-				bcopy(pdb->privbuf + pdb->privbuflen - left,
-					pdb->privbuf, left);
-				pdb->privbuflen = left;
-				rtsperror("decoder: %d bytes left, leave for next round\n", left);
-			} else {
+			if(left> 0) printf("%s %d: frame dropped\n", __FILE__, __LINE__); fflush(stdout); //comment-me
+//			if(left > 0) {
+//				bcopy(pdb->privbuf + pdb->privbuflen - left,
+//					pdb->privbuf, left);
+//				pdb->privbuflen = left;
+//				rtsperror("decoder: %d bytes left, leave for next round\n", left);
+//			} else {
 				pdb->privbuflen = 0;
-			}
+//			}
 		}
 	} else {
-		rtsperror("WARNING: video private buffer overflow.\n");
-		left = play_video_priv(channel, pdb->privbuf,
-				pdb->privbuflen, pdb->lastpts);
-		if(left > 0) {
-			bcopy(pdb->privbuf + pdb->privbuflen - left,
-				pdb->privbuf, left);
-			pdb->privbuflen = left;
-			rtsperror("decoder: %d bytes left, leave for next round\n", left);
-		} else {
+		printf("%s %d: Buffer overflow, frame dropped\n", __FILE__, __LINE__); fflush(stdout); //comment-me
+//		left = play_video_priv(channel, pdb->privbuf,
+//				pdb->privbuflen, pdb->lastpts);
+//		if(left > 0) {
+//			bcopy(pdb->privbuf + pdb->privbuflen - left,
+//				pdb->privbuf, left);
+//			pdb->privbuflen = left;
+//			rtsperror("decoder: %d bytes left, leave for next round\n", left);
+//		} else {
 			pdb->privbuflen = 0;
-		}
+//		}
 	}
 #ifdef ANDROID
 	}

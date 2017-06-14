@@ -17,6 +17,7 @@
  */
 
 #include <stdio.h>
+#include <cstdint>
 
 #include "vsource.h"
 #include "rtspconf.h"
@@ -57,6 +58,25 @@ static char *_pps[VIDEO_SOURCE_CHANNEL_MAX];
 static int _ppslen[VIDEO_SOURCE_CHANNEL_MAX];
 static char *_vps[VIDEO_SOURCE_CHANNEL_MAX];
 static int _vpslen[VIDEO_SOURCE_CHANNEL_MAX];
+
+/* CRC-32C (iSCSI) polynomial in reversed bit order. */
+#define POLY 0x82f63b78
+
+/* CRC-32 (Ethernet, ZIP, etc.) polynomial in reversed bit order. */
+/* #define POLY 0xedb88320 */
+
+uint32_t crc32c(uint32_t crc, const unsigned char *buf, size_t len)
+{
+    int k;
+
+    crc = ~crc;
+    while (len--) {
+        crc ^= *buf++;
+        for (k = 0; k < 8; k++)
+            crc = crc & 1 ? (crc >> 1) ^ POLY : crc >> 1;
+    }
+    return ~crc;
+}
 
 static int
 vencoder_deinit(void *arg) {
@@ -252,6 +272,7 @@ vencoder_threadproc(void *arg) {
 	encoder_pts_clear(iid);
 	//
 	nalbuf_size = 100000+12 * outputW * outputH;
+	nalbuf_size+= 4; //RAL: To be able to add CRC32 at the end
 	if(ga_malloc(nalbuf_size, (void**) &nalbuf, &nalign) < 0) {
 		ga_error("video encoder: buffer allocation failed, terminated.\n");
 		goto video_quit;
@@ -361,6 +382,17 @@ vencoder_threadproc(void *arg) {
 			} else {
 				gettimeofday(&tv, NULL);
 			}
+
+			if(pkt.data!= NULL && (encoder->codec_id== AV_CODEC_ID_LHE ||
+					encoder->codec_id== AV_CODEC_ID_MLHE)) {
+				uint32_t crc_32= crc32c(0, pkt.data, pkt.size); // include all pay-load bytes (except CRC)
+				pkt.data[pkt.size++]= crc_32>> 24;
+				pkt.data[pkt.size++]= (crc_32>> 16)& 0xFF;
+				pkt.data[pkt.size++]= (crc_32>>  8)& 0xFF;
+				pkt.data[pkt.size++]= crc_32& 0xFF;
+				//printf("%s %d: crc_32\n", __FILE__, __LINE__, crc_32); fflush(stdout); //comment-me
+			}
+
 			// send the packet
 			if(encoder_send_packet("video-encoder",
 				iid/*rtspconf->video_id*/, &pkt,
