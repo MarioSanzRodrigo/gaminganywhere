@@ -29,7 +29,7 @@
 #include "controller.h"
 #include "encoder-common.h"
 
-#define	TEST_RECONFIGURE
+//#define	TEST_RECONFIGURE //RAL: do not reconfigure by the moment
 
 // image source pipeline:
 //	vsource -- [vsource-%d] --> filter -- [filter-%d] --> encoder
