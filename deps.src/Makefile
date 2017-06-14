@@ -165,7 +165,7 @@ ffmpeg:
 	#rm -rf $(FFMPEGDIR)
 
 live555:
-	$(TGZUNPACK) $(LIVE555)
+	#$(TGZUNPACK) $(LIVE555)
 	# enable -fPIC for macosx and linux
 	mv -f $(LIVE555DIR)/config.linux $(LIVE555DIR)/config.linux.old
 	mv -f $(LIVE555DIR)/config.macosx $(LIVE555DIR)/config.macosx.old
@@ -181,5 +181,5 @@ live555:
 	-mkdir -p $(GADEPS)/include/live555
 	find $(LIVE555DIR) -name '*.hh' -exec cp -f {} $(GADEPS)/include/live555 \;
 	cp -f $(LIVE555DIR)/groupsock/include/NetCommon.h $(GADEPS)/include/live555
-	rm -rf $(LIVE555DIR)
+	#rm -rf $(LIVE555DIR)
 
