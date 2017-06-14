@@ -390,7 +390,7 @@ vencoder_threadproc(void *arg) {
 				pkt.data[pkt.size++]= (crc_32>> 16)& 0xFF;
 				pkt.data[pkt.size++]= (crc_32>>  8)& 0xFF;
 				pkt.data[pkt.size++]= crc_32& 0xFF;
-				//printf("%s %d: crc_32\n", __FILE__, __LINE__, crc_32); fflush(stdout); //comment-me
+				printf("%s %d: crc_32: %u\n", __FILE__, __LINE__, crc_32); fflush(stdout); //comment-me
 			}
 
 			// send the packet

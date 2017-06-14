@@ -1062,6 +1062,19 @@ play_video(int channel, unsigned char *buffer, int bufsize, struct timeval pts, 
 	 * buffer (marker indicates the last fragment of the frame);
 	 * - Else, buffer overflows.
 	 */
+printf("%s %d: marker: %u\n", __FILE__, __LINE__, marker); fflush(stdout); //comment-me
+	volatile static int flag_sync= 1, flag_first_frame= 0;
+	if(flag_sync && !marker) {
+		pdb->privbuflen= 0;
+		return;
+	}
+	if(flag_sync && marker) {
+		flag_sync= 0;
+		pdb->privbuflen= 0;
+		return;
+	}
+
+#if 0
 	if(pts.tv_sec != pdb->lastpts.tv_sec
 	|| pts.tv_usec != pdb->lastpts.tv_usec) {
 		if(pdb->privbuflen > 0) {
@@ -1069,7 +1082,9 @@ play_video(int channel, unsigned char *buffer, int bufsize, struct timeval pts, 
 			//	lastpts.tv_sec, lastpts.tv_usec);
 			left = play_video_priv(channel, pdb->privbuf,
 				pdb->privbuflen, pdb->lastpts);
-			if(left> 0) printf("%s %d: frame dropped\n", __FILE__, __LINE__); fflush(stdout); //comment-me
+			if(left> 0) {
+				printf("%s %d: frame dropped\n", __FILE__, __LINE__); fflush(stdout); //comment-me
+			}
 //			if(left > 0) {
 //				bcopy(pdb->privbuf + pdb->privbuflen - left,
 //					pdb->privbuf, left);
@@ -1081,20 +1096,24 @@ play_video(int channel, unsigned char *buffer, int bufsize, struct timeval pts, 
 		}
 		pdb->lastpts = pts;
 	}
+#endif
 	if(pdb->privbuflen + bufsize <= PRIVATE_BUFFER_SIZE) {
 		bcopy(buffer, &pdb->privbuf[pdb->privbuflen], bufsize);
 		pdb->privbuflen += bufsize;
 		if(marker && pdb->privbuflen > 0) { //RAL: Note that marker bit marks the end of the stream
 			left = play_video_priv(channel, pdb->privbuf,
 				pdb->privbuflen, pdb->lastpts);
-			if(left> 0) printf("%s %d: frame dropped\n", __FILE__, __LINE__); fflush(stdout); //comment-me
+			if(left> 0) {
+				printf("%s %d: frame dropped\n", __FILE__, __LINE__); fflush(stdout); //comment-me
+				flag_sync= 1;
+			}
 //			if(left > 0) {
 //				bcopy(pdb->privbuf + pdb->privbuflen - left,
 //					pdb->privbuf, left);
 //				pdb->privbuflen = left;
 //				rtsperror("decoder: %d bytes left, leave for next round\n", left);
 //			} else {
-				pdb->privbuflen = 0;
+			pdb->privbuflen = 0;
 //			}
 		}
 	} else {
@@ -1108,6 +1127,7 @@ play_video(int channel, unsigned char *buffer, int bufsize, struct timeval pts, 
 //			rtsperror("decoder: %d bytes left, leave for next round\n", left);
 //		} else {
 			pdb->privbuflen = 0;
+			flag_sync= 1;
 //		}
 	}
 #ifdef ANDROID
