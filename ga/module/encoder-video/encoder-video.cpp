@@ -33,6 +33,13 @@
 //// Prevent use of GLOBAL_HEADER to pass parameters, disabled by default
 //#define STANDALONE_SDP	1
 
+/**
+ *
+ */
+//#define PROFILE_VIDEO_ENCODER // comment-me: debugging purposes
+#define PROFILE_VIDEO_ENCODER_LOOP_CNT 5000
+//#define PROFILE_NETW_LATENCY_E2E
+
 static struct RTSPConf *rtspconf = NULL;
 
 static int vencoder_initialized = 0;
@@ -273,6 +280,9 @@ vencoder_threadproc(void *arg) {
 	//
 	nalbuf_size = 100000+12 * outputW * outputH;
 	nalbuf_size+= 4; //RAL: To be able to add CRC32 at the end
+#ifdef PROFILE_NETW_LATENCY_E2E
+	nalbuf_size+= 4; // RAL: To be able to add 32-bit unsigned monotinick clk
+#endif
 	if(ga_malloc(nalbuf_size, (void**) &nalbuf, &nalign) < 0) {
 		ga_error("video encoder: buffer allocation failed, terminated.\n");
 		goto video_quit;
@@ -351,7 +361,53 @@ vencoder_threadproc(void *arg) {
 		av_init_packet(&pkt);
 		pkt.data = nalbuf_a;
 		pkt.size = nalbuf_size;
-		if(avcodec_encode_video2(encoder, &pkt, pic_in, &got_packet) < 0) {
+
+#ifdef PROFILE_VIDEO_ENCODER
+		struct timespec time_start;
+		struct timespec time_stop;
+		uint64_t profile_nsecs;
+		static uint64_t period_start_nsecs= 0, period_nsecs;
+		static uint32_t average_counter= 0;
+		static uint64_t average_nsecs= 0;
+		static uint64_t profile_peak_nsecs= 0;
+		static uint64_t profile_min_nsecs= (uint64_t)0xFFFFFFFFFF;
+		static size_t peak_size= 0, min_size= 0;
+		static uint64_t average_size= 0;
+		clock_gettime(CLOCK_MONOTONIC, &time_start);
+#endif
+		int enc_ret= avcodec_encode_video2(encoder, &pkt, pic_in, &got_packet);
+#ifdef PROFILE_VIDEO_ENCODER
+#define TIMESPEC_2_NSEC64b(TIMESPEC) \
+		(uint64_t)\
+		((uint64_t)TIMESPEC.tv_sec*1000000000+ (uint64_t)TIMESPEC.tv_nsec)
+		clock_gettime(CLOCK_MONOTONIC, &time_stop);
+		profile_nsecs= TIMESPEC_2_NSEC64b(time_stop)- TIMESPEC_2_NSEC64b(time_start);
+		if(period_start_nsecs== 0) period_start_nsecs= TIMESPEC_2_NSEC64b(time_start);
+		if(profile_nsecs> profile_peak_nsecs) {
+			profile_peak_nsecs= profile_nsecs;
+			peak_size= pkt.size;
+		}
+		if(profile_nsecs< profile_min_nsecs) {
+			profile_min_nsecs= profile_nsecs;
+			min_size= pkt.size;
+		}
+		average_nsecs+= profile_nsecs;
+		average_size+= pkt.size;
+		if(++average_counter> PROFILE_VIDEO_ENCODER_LOOP_CNT) {
+			period_nsecs= TIMESPEC_2_NSEC64b(time_stop)- period_start_nsecs;
+			printf("\n//--------- Profiling ENC ---------//\n");
+			printf("Average [nsecs]: %"PRIu64"; average size: %"PRIu64"\n", average_nsecs/average_counter, average_size/average_counter);
+			printf("Peak [nsecs]: %"PRIu64"; peak size: %"PRIu64"\n", profile_peak_nsecs, peak_size);
+			printf("Min [nsecs]: %"PRIu64"; min. size: %"PRIu64"\n", profile_min_nsecs, min_size);
+			printf("Bitrate~: %"PRIu64" [bps]\n", (((uint64_t)average_size)<< 3)/
+					((uint64_t)period_nsecs/(1000*1000*1000)));
+			printf("Fps~: %"PRIu64"\n", average_counter/((uint64_t)period_nsecs/(1000*1000*1000)));
+			printf("//---------------------------------//\n");
+			average_counter= average_nsecs= 0;
+			average_size= 0;
+		}
+#endif
+		if(enc_ret< 0) {
 			ga_error("video encoder: encode failed, terminated.\n");
 			goto video_quit;
 		}
@@ -383,6 +439,21 @@ vencoder_threadproc(void *arg) {
 				gettimeofday(&tv, NULL);
 			}
 
+#ifdef PROFILE_NETW_LATENCY_E2E
+			struct timespec time_lat;
+			uint64_t usecs;
+#define TIMESPEC_2_USEC64b(TIMESPEC) \
+		(uint64_t)\
+		((uint64_t)TIMESPEC.tv_sec*1000000+ (uint64_t)TIMESPEC.tv_nsec/1000)
+			clock_gettime(CLOCK_MONOTONIC, &time_lat);
+			usecs= TIMESPEC_2_USEC64b(time_lat);
+			printf("%u\n", (uint32_t)usecs);
+			pkt.data[pkt.size++]= (usecs>> 24)& 0xFF;
+			pkt.data[pkt.size++]= (usecs>> 16)& 0xFF;
+			pkt.data[pkt.size++]= (usecs>>  8)& 0xFF;
+			pkt.data[pkt.size++]= usecs& 0xFF;
+#endif
+
 			if(pkt.data!= NULL && (encoder->codec_id== AV_CODEC_ID_LHE ||
 					encoder->codec_id== AV_CODEC_ID_MLHE)) {
 				uint32_t crc_32= crc32c(0, pkt.data, pkt.size); // include all pay-load bytes (except CRC)
@@ -390,7 +461,7 @@ vencoder_threadproc(void *arg) {
 				pkt.data[pkt.size++]= (crc_32>> 16)& 0xFF;
 				pkt.data[pkt.size++]= (crc_32>>  8)& 0xFF;
 				pkt.data[pkt.size++]= crc_32& 0xFF;
-				printf("%s %d: crc_32: %u\n", __FILE__, __LINE__, crc_32); fflush(stdout); //comment-me
+				//printf("%s %d: crc_32: %u\n", __FILE__, __LINE__, crc_32); fflush(stdout); //comment-me
 			}
 
 			// send the packet

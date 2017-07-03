@@ -55,6 +55,13 @@ unsigned increaseReceiveBufferTo(UsageEnvironment& env,
 
 using namespace std;
 
+/**
+ *
+ */
+//#define PROFILE_VIDEO_DECODER // comment-me: debugging purposes
+#define PROFILE_VIDEO_ENCODER_LOOP_CNT 5000
+//#define PROFILE_NETW_LATENCY_E2E
+
 #ifndef	AVCODEC_MAX_AUDIO_FRAME_SIZE
 #define	AVCODEC_MAX_AUDIO_FRAME_SIZE	192000 // 1 second of 48khz 32bit audio
 #endif
@@ -812,9 +819,30 @@ play_video_priv(int ch/*channel*/, unsigned char *buffer, int bufsize, struct ti
 		return bufsize;
 	}
 	//{ //RAL: Check CRC32
-	// Check if it is LHE //TODO
+#ifdef PROFILE_VIDEO_DECODER
+	static uint64_t average_loss= 0;
+#endif
 	if(buffer== NULL)
 		return bufsize;
+
+#ifdef PROFILE_NETW_LATENCY_E2E
+	struct timespec time_lat;
+	uint64_t usecs_stop, usecs_start;
+#define TIMESPEC_2_USEC64b(TIMESPEC) \
+		(uint64_t)\
+		((uint64_t)TIMESPEC.tv_sec*1000000+ (uint64_t)TIMESPEC.tv_nsec/1000)
+	clock_gettime(CLOCK_MONOTONIC, &time_lat);
+	usecs_stop= TIMESPEC_2_USEC64b(time_lat);
+	usecs_start= buffer[bufsize- 8]<< 24;
+	usecs_start|= buffer[bufsize- 7]<< 16;
+	usecs_start|= buffer[bufsize- 6]<< 8;
+	usecs_start|= buffer[bufsize- 5];
+	printf("\n//--------- Profiling NET E2E ---------//\n");
+	printf("%u, %u\n", (uint32_t)usecs_stop, (uint32_t)usecs_start);
+	printf("Latency [usecs]: %u\n", (uint32_t)usecs_stop- (uint32_t)usecs_start);
+	printf("//---------------------------------//\n"); fflush(stdout);
+#endif
+
 	if(vdecoder[ch] && (vdecoder[ch]->codec_id== AV_CODEC_ID_LHE ||
 			vdecoder[ch]->codec_id== AV_CODEC_ID_MLHE)) {
 		uint32_t crc32= buffer[bufsize- 4]<< 24;
@@ -824,6 +852,9 @@ play_video_priv(int ch/*channel*/, unsigned char *buffer, int bufsize, struct ti
 		//printf("crc_32:%u ", crc32); fflush(stdout); //comment-me
 		if(crc32c(0, buffer, bufsize- 4)!= crc32) {
 			printf("Inconsistent CRC-32 in pay-load.\n"); fflush(stdout);
+#ifdef PROFILE_VIDEO_DECODER
+			average_loss++;
+#endif
 			return bufsize;
 		}
 	}
@@ -858,7 +889,55 @@ play_video_priv(int ch/*channel*/, unsigned char *buffer, int bufsize, struct ti
 #ifdef PRINT_LATENCY
 		gettimeofday(&ptv0, NULL);
 #endif
-		if((len = avcodec_decode_video2(vdecoder[ch], vframe[ch], &got_picture, &avpkt)) < 0) {
+
+#ifdef PROFILE_VIDEO_DECODER
+		struct timespec time_start;
+		struct timespec time_stop;
+		uint64_t profile_nsecs;
+		static uint64_t period_start_nsecs= 0, period_nsecs;
+		static uint32_t average_counter= 0;
+		static uint64_t average_nsecs= 0;
+		static uint64_t profile_peak_nsecs= 0;
+		static uint64_t profile_min_nsecs= (uint64_t)0xFFFFFFFFFF;
+		static size_t peak_size= 0, min_size= 0;
+		static uint64_t average_size= 0;
+		clock_gettime(CLOCK_MONOTONIC, &time_start);
+#endif
+		len= avcodec_decode_video2(vdecoder[ch], vframe[ch], &got_picture, &avpkt);
+#ifdef PROFILE_VIDEO_DECODER
+#define TIMESPEC_2_NSEC64b(TIMESPEC) \
+		(uint64_t)\
+		((uint64_t)TIMESPEC.tv_sec*1000000000+ (uint64_t)TIMESPEC.tv_nsec)
+		clock_gettime(CLOCK_MONOTONIC, &time_stop);
+		profile_nsecs= TIMESPEC_2_NSEC64b(time_stop)- TIMESPEC_2_NSEC64b(time_start);
+		if(period_start_nsecs== 0) period_start_nsecs= TIMESPEC_2_NSEC64b(time_start);
+		if(profile_nsecs> profile_peak_nsecs) {
+			profile_peak_nsecs= profile_nsecs;
+			peak_size= avpkt.size;
+		}
+		if(profile_nsecs< profile_min_nsecs) {
+			profile_min_nsecs= profile_nsecs;
+			min_size= avpkt.size;
+		}
+		average_nsecs+= profile_nsecs;
+		average_size+= avpkt.size;
+		if(++average_counter> PROFILE_VIDEO_ENCODER_LOOP_CNT) {
+			period_nsecs= TIMESPEC_2_NSEC64b(time_stop)- period_start_nsecs;
+			printf("\n//--------- Profiling DEC ---------//\n");
+			printf("Average [nsecs]: %"PRIu64"; average size: %"PRIu64"\n", average_nsecs/average_counter, average_size/average_counter);
+			printf("Peak [nsecs]: %"PRIu64"; peak size: %"PRIu64"\n", profile_peak_nsecs, peak_size);
+			printf("Min [nsecs]: %"PRIu64"; min. size: %"PRIu64"\n", profile_min_nsecs, min_size);
+			printf("Bitrate~: %"PRIu64" [bps]\n", (((uint64_t)average_size)<< 3)/
+					((uint64_t)period_nsecs/(1000*1000*1000)));
+			printf("Fps~: %"PRIu64"\n", average_counter/((uint64_t)period_nsecs/(1000*1000*1000)));
+			printf("Loss~: %"PRIu64" [%]\n", (average_loss* 100)/(average_counter+ average_loss));
+			printf("//---------------------------------//\n");
+			average_counter= average_nsecs= 0;
+			average_loss= 0;
+			average_size= 0;
+		}
+#endif
+		if(len< 0) {
 			//rtsperror("decode video frame %d error\n", frame);
 			break;
 		}
@@ -1062,7 +1141,7 @@ play_video(int channel, unsigned char *buffer, int bufsize, struct timeval pts, 
 	 * buffer (marker indicates the last fragment of the frame);
 	 * - Else, buffer overflows.
 	 */
-printf("%s %d: marker: %u\n", __FILE__, __LINE__, marker); fflush(stdout); //comment-me
+	//printf("%s %d: marker: %u\n", __FILE__, __LINE__, marker); fflush(stdout); //comment-me
 	volatile static int flag_sync= 1, flag_first_frame= 0;
 	if(flag_sync && !marker) {
 		pdb->privbuflen= 0;
@@ -1623,7 +1702,6 @@ setupNextSubsession(RTSPClient* rtspClient) {
 
 	scs.subsession = scs.iter->next();
 	do if (scs.subsession != NULL) {
-		printf("*** client ****\n"); fflush(stdout); //RAL: comment-me
 		if (!scs.subsession->initiate(0)) { //RAL: enable unknown SDP codec specifications
 			env << *rtspClient << "Failed to initiate the \"" << *scs.subsession << "\" subsession: " << env.getResultMsg() << "\n";
 			setupNextSubsession(rtspClient); // give up on this subsession; go to the next one
