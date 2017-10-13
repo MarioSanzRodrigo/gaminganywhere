@@ -30,34 +30,45 @@
 
 #include "dpipe.h"
 
-//// Prevent use of GLOBAL_HEADER to pass parameters, disabled by default
-//#define STANDALONE_SDP	1
+// { //RAL
+extern "C" {
+#include <libcjson/cJSON.h>
 
+#include <libavcodec/avcodec.h>
+#include <libavutil/opt.h>
+#include <libavutil/imgutils.h>
+#include <libmediaprocsutils/log.h>
+#include <libmediaprocsutils/check_utils.h>
+#include <libmediaprocsutils/stat_codes.h>
+#include <libmediaprocsutils/fifo.h>
+#include <libmediaprocsutils/schedule.h>
+#include <libmediaprocs/proc_if.h>
+#include <libmediaprocs/procs.h>
+#include <libmediaprocs/procs_api_http.h>
+#include <libmediaprocs/proc.h>
+#include <libmediaprocscodecs/ffmpeg_x264.h>
+}
+
+procs_ctx_t *procs_ctx= NULL; //RAL: FIXME!! //Take elsewhere
+// } //RAL
 static struct RTSPConf *rtspconf = NULL;
 
 static int vencoder_initialized = 0;
 static int vencoder_started = 0;
 static pthread_t vencoder_tid[VIDEO_SOURCE_CHANNEL_MAX];
 //// encoders for encoding
-static AVCodecContext *vencoder[VIDEO_SOURCE_CHANNEL_MAX];
+//static AVCodecContext *vencoder[VIDEO_SOURCE_CHANNEL_MAX];
 // Mutex for reconfiguration settings
-static pthread_mutex_t vencoder_reconf_mutex[VIDEO_SOURCE_CHANNEL_MAX];
-static ga_ioctl_reconfigure_t vencoder_reconf[VIDEO_SOURCE_CHANNEL_MAX];
-#ifdef STANDALONE_SDP
-//// encoders for generating SDP
-/* separate encoder and encoder_sdp because some ffmpeg codecs
- * only generate ctx->extradata when CODEC_FLAG_GLOBAL_HEADER flag
- * is set */
-static AVCodecContext *vencoder_sdp[VIDEO_SOURCE_CHANNEL_MAX];
-#endif
+//static pthread_mutex_t vencoder_reconf_mutex[VIDEO_SOURCE_CHANNEL_MAX];
+//static ga_ioctl_reconfigure_t vencoder_reconf[VIDEO_SOURCE_CHANNEL_MAX];
 
-// specific data for h.264/h.265
-static char *_sps[VIDEO_SOURCE_CHANNEL_MAX];
-static int _spslen[VIDEO_SOURCE_CHANNEL_MAX];
-static char *_pps[VIDEO_SOURCE_CHANNEL_MAX];
-static int _ppslen[VIDEO_SOURCE_CHANNEL_MAX];
-static char *_vps[VIDEO_SOURCE_CHANNEL_MAX];
-static int _vpslen[VIDEO_SOURCE_CHANNEL_MAX];
+// specific data for h.264/h.265 //FIXME!!: //NOT USED
+//static char *_sps[VIDEO_SOURCE_CHANNEL_MAX];
+//static int _spslen[VIDEO_SOURCE_CHANNEL_MAX];
+//static char *_pps[VIDEO_SOURCE_CHANNEL_MAX];
+//static int _ppslen[VIDEO_SOURCE_CHANNEL_MAX];
+//static char *_vps[VIDEO_SOURCE_CHANNEL_MAX];
+//static int _vpslen[VIDEO_SOURCE_CHANNEL_MAX];
 
 /* CRC-32C (iSCSI) polynomial in reversed bit order. */
 #define POLY 0x82f63b78
@@ -82,33 +93,23 @@ static int
 vencoder_deinit(void *arg) {
 	int iid;
 	for(iid = 0; iid < video_source_channels(); iid++) {
-		if(_sps[iid] != NULL)
-			free(_sps[iid]);
-		if(_pps[iid] != NULL)
-			free(_pps[iid]);
-#ifdef STANDALONE_SDP
-		if(vencoder_sdp[iid] != NULL)
-			ga_avcodec_close(vencoder_sdp[iid]);
-#endif
-		if(vencoder[iid] != NULL)
-			ga_avcodec_close(vencoder[iid]);
-#ifdef STANDALONE_SDP
-		vencoder_sdp[iid] = NULL;
-#endif
-		pthread_mutex_destroy(&vencoder_reconf_mutex[iid]);
-		vencoder[iid] = NULL;
+		//if(vencoder[iid] != NULL)
+		//	ga_avcodec_close(vencoder[iid]);
+		//pthread_mutex_destroy(&vencoder_reconf_mutex[iid]);
+		//vencoder[iid] = NULL;
+		// RAL: //FIXME
+		// { //RAL
+		int ret_code= procs_opt(procs_ctx, "PROCS_ID_DELETE",
+				iid/*enc_proc_id*/); // before joining to unblock processor
+		// } //RAL
 	}
-	bzero(_sps, sizeof(_sps));
-	bzero(_pps, sizeof(_pps));
-	bzero(_spslen, sizeof(_spslen));
-	bzero(_ppslen, sizeof(_ppslen));
 	vencoder_initialized = 0;
 	ga_error("video encoder: deinitialized.\n");
 	return 0;
 }
 
-static int
-vencoder_init(void *arg) {
+static int vencoder_init(void *arg)
+{
 	int iid;
 	char *pipefmt = (char*) arg;
 	struct RTSPConf *rtspconf = rtspconf_global();
@@ -119,16 +120,33 @@ vencoder_init(void *arg) {
 	}
 	if(vencoder_initialized != 0)
 		return 0;
+
+	// { //RAL
+	/* Register encoder, decoder, RTSP multiplexer and RTSP de-multiplexer
+	 * processor types.
+	 */
+	procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_x264_enc);
+	/*if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_x264_enc)!= STAT_SUCCESS) {
+		fprintf(stderr, "Error at line: %d\n", __LINE__);
+		exit(-1);
+	}*/
+
+	/* Get PROCS module's instance */ //RAL //FIXME!! //take elsewhere
+	if((procs_ctx= procs_open(NULL))== NULL) {
+		fprintf(stderr, "Error at line: %d\n", __LINE__);
+		exit(-1);
+	}
+	// }
 	//
 	for(iid = 0; iid < video_source_channels(); iid++) {
 		char pipename[64];
 		int outputW, outputH;
 		dpipe_t *pipe;
 		//
-		_sps[iid] = _pps[iid] = NULL;
-		_spslen[iid] = _ppslen[iid] = 0;
-		pthread_mutex_init(&vencoder_reconf_mutex[iid], NULL);
-		vencoder_reconf[iid].id = -1;
+//_sps[iid] = _pps[iid] = NULL;
+//_spslen[iid] = _ppslen[iid] = 0;
+//pthread_mutex_init(&vencoder_reconf_mutex[iid], NULL);
+//vencoder_reconf[iid].id = -1;
 		snprintf(pipename, sizeof(pipename), pipefmt, iid);
 		outputW = video_source_out_width(iid);
 		outputH = video_source_out_height(iid);
@@ -138,38 +156,45 @@ vencoder_init(void *arg) {
 		}
 		ga_error("video encoder: video source #%d from '%s' (%dx%d).\n",
 			iid, pipe->name, outputW, outputH);
-		vencoder[iid] = ga_avcodec_vencoder_init(NULL,
-				rtspconf->video_encoder_codec,
-				outputW, outputH,
-				rtspconf->video_fps, rtspconf->vso);
-		if(vencoder[iid] == NULL)
-			goto init_failed;
-#ifdef STANDALONE_SDP
-		// encoders for SDP generation
-		switch(rtspconf->video_encoder_codec->id) {
-		case AV_CODEC_ID_H264:
-		case AV_CODEC_ID_H265:
-		case AV_CODEC_ID_CAVS:
-		case AV_CODEC_ID_MPEG4:
-			// need ctx with CODEC_FLAG_GLOBAL_HEADER flag
-			avc = avcodec_alloc_context3(rtspconf->video_encoder_codec);
-			if(avc == NULL)
-				goto init_failed;
-			avc->flags |= CODEC_FLAG_GLOBAL_HEADER;
-			avc = ga_avcodec_vencoder_init(avc,
-				rtspconf->video_encoder_codec,
-				outputW, outputH,
-				rtspconf->video_fps, rtspconf->vso);
-			if(avc == NULL)
-				goto init_failed;
-			ga_error("video encoder: meta-encoder #%d created.\n", iid);
-			break;
-		default:
-			// do nothing
-			break;
+
+		//RAL //FIXME!!: Configuration here using textual 'rtspconf->vso'
+		// {
+		{
+			int ret_code;
+			char *rest_str= NULL;
+			char proc_settings[128]= {0};
+			//cJSON *cjson_rest= NULL, *cjson_aux= NULL;
+
+			snprintf(proc_settings, sizeof(proc_settings),
+					"width_output=%d&height_output=%d", outputW, outputH);
+			ret_code= procs_opt(procs_ctx, "PROCS_POST", "ffmpeg_x264_enc"/*proc_name*/, proc_settings, &rest_str);
+			if(ret_code!= STAT_SUCCESS || rest_str== NULL) {
+				fprintf(stderr, "Error at line: %d\n", __LINE__);
+				exit(-1);
+			}
+// We "know" id==iid //FIXME!!
+			//if((cjson_rest= cJSON_Parse(rest_str))== NULL) {
+			//	fprintf(stderr, "Error at line: %d\n", __LINE__);
+			//	exit(-1);
+			//}
+			//if((cjson_aux= cJSON_GetObjectItem(cjson_rest, "proc_id"))== NULL) {
+			//	fprintf(stderr, "Error at line: %d\n", __LINE__);
+			//	exit(-1);
+			//}
+			//if((*ref_proc_id= cjson_aux->valuedouble)< 0) {
+			//	fprintf(stderr, "Error at line: %d\n", __LINE__);
+			//	exit(-1);
+			//}
+			free(rest_str); rest_str= NULL;
+			//cJSON_Delete(cjson_rest); cjson_rest= NULL;
 		}
-		vencoder_sdp[iid] = avc;
-#endif
+		// }
+		//vencoder[iid] = ga_avcodec_vencoder_init(NULL,
+		//		rtspconf->video_encoder_codec,
+		//		outputW, outputH,
+		//		rtspconf->video_fps, rtspconf->vso);
+		//if(vencoder[iid] == NULL)
+		//	goto init_failed;
 	}
 	vencoder_initialized = 1;
 	ga_error("video encoder: initialized.\n");
@@ -179,60 +204,101 @@ init_failed:
 	return -1;
 }
 
-static int
-vencoder_reconfigure(int iid) {
-	struct RTSPConf *rtspconf = rtspconf_global();
-	int ret = 0;
-	ga_ioctl_reconfigure_t *reconf = &vencoder_reconf[iid];
-	pthread_mutex_lock(&vencoder_reconf_mutex[iid]);
-	if(reconf->id >= 0) {
-		ga_error("video encoder: Reconfiguring video encoder\n");
-		int outputW, outputH;
-		outputW = video_source_out_width(iid);
-		outputH = video_source_out_height(iid);
+static void* mux_thr(void *t) // RAL: FIXME!!
+{
+	//thr_ctx_t *thr_ctx= (thr_ctx_t*)t;
+	proc_frame_ctx_t *proc_frame_ctx= NULL;
 
-		ga_avcodec_close(vencoder[iid]);
-		// ga_error("Closing encoder context\n");
-		// avcodec_close(vencoder[iid]);
+	/* Check argument */
+	/*if(thr_ctx== NULL) {
+		fprintf(stderr, "Bad argument 'consumer_thr()'\n");
+		exit(1);
+	}*/
 
-		for (int i = 0; i < rtspconf->vso->size(); i += 2) {
-			if ((*rtspconf->vso)[i].compare("b") == 0) {
-				if (reconf->bitrateKbps > 0)
-					(*rtspconf->vso)[i+1] = std::to_string(reconf->bitrateKbps * 1000);
-				continue;
+	/* Get frame from encoder and send to multiplexer */
+	while(vencoder_started != 0 && encoder_running() > 0/*thr_ctx->flag_exit== 0*/) {
+		int ret_code;
+
+		/* Receive encoded frame */
+		if(proc_frame_ctx!= NULL)
+			proc_frame_ctx_release(&proc_frame_ctx);
+		ret_code= procs_recv_frame(procs_ctx, 0/*enc_proc_id*/,
+				&proc_frame_ctx);
+		if(ret_code!= STAT_SUCCESS) {
+			if(ret_code== STAT_EAGAIN)
+				schedule(); // Avoid closed loops
+			else
+				fprintf(stderr, "Error while encoding frame'\n");
+			continue;
+		}
+
+		/* Send encoded frame to multiplexer.
+		 * IMPORTANT: Set correctly the elementary stream Id. to be able to
+		 * correctly multiplex each frame.
+		 */
+		if(proc_frame_ctx== NULL)
+			continue;
+		fprintf(stderr, "Got frame!!'\n");
+
+		{
+			register int data_size;
+			AVPacket *avpacket= NULL;
+			struct timeval tv;
+			LOG_CTX_INIT(NULL);
+
+			/* Allocate FFmpeg's packet structure */
+			avpacket= av_packet_alloc(); // Calls 'av_init_packet()' internally
+			ASSERT(avpacket!= NULL);
+
+			/* Input encoded data only uses one data plane; note that:
+			 * - 'proc_frame_ctx->width[0]': represents the size of the packet in
+			 * bytes;
+			 * - 'proc_frame_ctx->p_data[0]': is the pointer to the packet data.
+			 */
+			data_size= proc_frame_ctx->width[0];
+			ret_code= av_new_packet(avpacket, data_size);
+			ASSERT(ret_code== 0 && avpacket->data!= NULL &&
+					avpacket->size== data_size);
+			memcpy(avpacket->data, proc_frame_ctx->p_data[0], data_size);
+
+			/* Copy presentation and decoding time-stamps */
+			avpacket->pts= proc_frame_ctx->pts;
+			avpacket->dts= proc_frame_ctx->dts;
+			avpacket->stream_index= proc_frame_ctx->es_id;
+
+			// send the packet
+			if(encoder_send_packet("video-encoder",
+				0/*iid*//*rtspconf->video_id*/, avpacket,
+				avpacket->pts, &tv) < 0) {
+				fprintf(stderr, "Error while multiplexing frame'\n"); //goto video_quit;
 			}
-			if ((*rtspconf->vso)[i].compare("crf") == 0) {
-				if (reconf->crf > 0)
-					(*rtspconf->vso)[i+1] = std::to_string(reconf->crf);
-				continue;
+			//if(video_written == 0) {
+			//	video_written = 1;
+			//	ga_error("first video frame written (pts=%lld)\n", pts);
+			//}
+			if(avpacket!= NULL) {
+				//avpacket_release((void**)&avpacket);
+				av_packet_free((AVPacket**)
+						&avpacket); //<- Internally set pointer to NULL
+				avpacket= NULL; // redundant
 			}
 		}
 
-		if (reconf->framerate_n > 0)
-			rtspconf->video_fps = reconf->framerate_n;
-		if (reconf->width > 0)
-			outputW = reconf->width;
-		if (reconf->height > 0)
-			outputH = reconf->height;
-
-		ga_avcodec_vencoder_init(vencoder[iid], 
-			rtspconf->video_encoder_codec,
-			outputW, outputH,
-			rtspconf->video_fps,
-			rtspconf->vso);
-
-		if (vencoder[iid] == NULL) {
-			ga_error("video encoder: reconfigure failed. crf=%d; framerate=%d/%d; bitrate=%d; bufsize=%d.\n",
-					reconf->crf,
-					reconf->framerate_n, reconf->framerate_d,
-					reconf->bitrateKbps,
-					reconf->bufsize);
-			ret = -1;
-		}
-		reconf->id = -1;
+		/*proc_frame_ctx->es_id= thr_ctx->elem_strem_id_video_server;
+		ret_code= procs_send_frame(thr_ctx->procs_ctx, thr_ctx->mux_proc_id,
+				proc_frame_ctx);
+		if(ret_code!= STAT_SUCCESS) {
+			if(ret_code== STAT_EAGAIN)
+				schedule(); // Avoid closed loops
+			else
+				fprintf(stderr, "Error while multiplexing frame'\n");
+			continue;
+		}*/
 	}
-	pthread_mutex_unlock(&vencoder_reconf_mutex[iid]);
-	return ret;
+
+	if(proc_frame_ctx!= NULL)
+		proc_frame_ctx_release(&proc_frame_ctx);
+	return NULL;
 }
 
 static void *
@@ -243,7 +309,9 @@ vencoder_threadproc(void *arg) {
 	char *pipename = (char*) arg;
 	dpipe_t *pipe = dpipe_lookup(pipename);
 	dpipe_buffer_t *data = NULL;
-	AVCodecContext *encoder = NULL;
+//AVCodecContext *encoder = NULL;
+	pthread_t mux_thread; //RAL
+	int ret_code; //RAL
 	//
 	AVFrame *pic_in = NULL;
 	unsigned char *pic_in_buf = NULL;
@@ -264,7 +332,7 @@ vencoder_threadproc(void *arg) {
 	rtspconf = rtspconf_global();
 	// init variables
 	iid = pipe->channel_id;
-	encoder = vencoder[iid];
+//encoder = vencoder[iid];
 	//
 	outputW = video_source_out_width(iid);
 	outputH = video_source_out_height(iid);
@@ -300,9 +368,17 @@ vencoder_threadproc(void *arg) {
 		outputW, outputH, rtspconf->video_fps,
 		nalbuf_size, pic_in_size);
 	//
+
+	ret_code= pthread_create(&mux_thread, NULL, mux_thr, NULL); //RAL
+	if(ret_code!= 0) {
+		fprintf(stderr, "Error at line: %d\n", __LINE__);
+		exit(-1);
+	}
+
 	while(vencoder_started != 0 && encoder_running() > 0) {
-		// Reconfigure encoder (if required)
-		vencoder_reconfigure(iid);
+// Reconfigure encoder (if required) //FIXME!!: NOT USED
+//vencoder_reconfigure(iid); //FIXME!!: NOT USED
+		proc_frame_ctx_t proc_frame_ctx= {0};
 		AVPacket pkt;
 		int got_packet = 0;
 		// wait for notification
@@ -351,39 +427,46 @@ vencoder_threadproc(void *arg) {
 		av_init_packet(&pkt);
 		pkt.data = nalbuf_a;
 		pkt.size = nalbuf_size;
-		if(avcodec_encode_video2(encoder, &pkt, pic_in, &got_packet) < 0) {
-			ga_error("video encoder: encode failed, terminated.\n");
-			goto video_quit;
-		}
-		if(got_packet) {
-			if(pkt.pts == (int64_t) AV_NOPTS_VALUE) {
-				pkt.pts = pts;
-			}
-			pkt.stream_index = 0;
-#if 0			// XXX: dump naltype
-			do {
-				int codelen;
-				unsigned char *ptr;
-				fprintf(stderr, "[XXX-naldump]");
-				for(	ptr = ga_find_startcode(pkt.data, pkt.data+pkt.size, &codelen);
-					ptr != NULL;
-					ptr = ga_find_startcode(ptr+codelen, pkt.data+pkt.size, &codelen)) {
-					//
-					fprintf(stderr, " (+%d|%d)-%02x", ptr-pkt.data, codelen, ptr[codelen] & 0x1f);
-				}
-				fprintf(stderr, "\n");
-			} while(0);
-#endif
-			//
-			if(pkt.pts != AV_NOPTS_VALUE) {
-				if(encoder_ptv_get(iid, pkt.pts, &tv, 0) == NULL) {
-					gettimeofday(&tv, NULL);
-				}
-			} else {
-				gettimeofday(&tv, NULL);
-			}
 
-			if(pkt.data!= NULL && (encoder->codec_id== AV_CODEC_ID_LHE ||
+	    proc_frame_ctx.data= pic_in_buf;
+	    proc_frame_ctx.p_data[0]= pic_in->data[0];
+	    proc_frame_ctx.p_data[1]= pic_in->data[1];
+	    proc_frame_ctx.p_data[2]= pic_in->data[2];
+	    proc_frame_ctx.linesize[0]= pic_in->linesize[0];
+	    proc_frame_ctx.linesize[1]= pic_in->linesize[1];
+	    proc_frame_ctx.linesize[2]= pic_in->linesize[2];
+	    proc_frame_ctx.width[0]= pic_in->width;
+	    proc_frame_ctx.width[1]= pic_in->width>> 1;
+	    proc_frame_ctx.width[2]= pic_in->width>> 1;
+	    proc_frame_ctx.height[0]= pic_in->height;
+	    proc_frame_ctx.height[1]= pic_in->height>> 1;
+	    proc_frame_ctx.height[2]= pic_in->height>> 1;
+	    proc_frame_ctx.proc_sample_fmt= PROC_IF_FMT_YUV420P;
+	    proc_frame_ctx.es_id= 0;
+	    proc_frame_ctx.pts= pts;
+
+        /* Encode the image */
+        procs_send_frame(procs_ctx, iid/*enc_proc_id*/, &proc_frame_ctx);
+
+	    //if(avcodec_encode_video2(encoder, &pkt, pic_in, &got_packet) < 0) {
+	    //	ga_error("video encoder: encode failed, terminated.\n");
+	    //	goto video_quit;
+	    //}
+	    //if(got_packet) {
+	    //	if(pkt.pts == (int64_t) AV_NOPTS_VALUE) {
+	    //		pkt.pts = pts;
+	    //	}
+	    //	pkt.stream_index = 0;
+			//
+	    //	if(pkt.pts != AV_NOPTS_VALUE) {
+	    //		if(encoder_ptv_get(iid, pkt.pts, &tv, 0) == NULL) {
+	    //			gettimeofday(&tv, NULL);
+	    //		}
+	    //	} else {
+	    //		gettimeofday(&tv, NULL);
+	    //	}
+
+/*			if(pkt.data!= NULL && (encoder->codec_id== AV_CODEC_ID_LHE ||
 					encoder->codec_id== AV_CODEC_ID_MLHE)) {
 				uint32_t crc_32= crc32c(0, pkt.data, pkt.size); // include all pay-load bytes (except CRC)
 				pkt.data[pkt.size++]= crc_32>> 24;
@@ -392,27 +475,18 @@ vencoder_threadproc(void *arg) {
 				pkt.data[pkt.size++]= crc_32& 0xFF;
 				printf("%s %d: crc_32: %u\n", __FILE__, __LINE__, crc_32); fflush(stdout); //comment-me
 			}
-
+*/
 			// send the packet
-			if(encoder_send_packet("video-encoder",
-				iid/*rtspconf->video_id*/, &pkt,
-				pkt.pts, &tv) < 0) {
-				goto video_quit;
-			}
-			// free unused side-data
-			if(pkt.side_data_elems > 0) {
-				int i;
-				for (i = 0; i < pkt.side_data_elems; i++)
-					av_free(pkt.side_data[i].data);
-				av_freep(&pkt.side_data);
-				pkt.side_data_elems = 0;
-			}
-			//
-			if(video_written == 0) {
-				video_written = 1;
-				ga_error("first video frame written (pts=%lld)\n", pts);
-			}
-		}
+			//if(encoder_send_packet("video-encoder",
+			//	iid/*rtspconf->video_id*/, &pkt,
+			//	pkt.pts, &tv) < 0) {
+			//	goto video_quit;
+			//}
+			//if(video_written == 0) {
+			//	video_written = 1;
+			//	ga_error("first video frame written (pts=%lld)\n", pts);
+			//}
+		//} if(got_packet)
 	}
 	//
 video_quit:
@@ -463,7 +537,7 @@ vencoder_stop(void *arg) {
 	ga_error("video encdoer: all stopped (%d)\n", iid);
 	return 0;
 }
-
+#if 0 //RAL //FIXME!!
 static void *
 vencoder_raw(void *arg, int *size) {
 #if defined __APPLE__
@@ -480,176 +554,11 @@ vencoder_raw(void *arg, int *size) {
 		*size = sizeof(vencoder[iid]);
 	return vencoder[iid];
 }
-
-/* find startcode: XXX: only 00 00 00 01 - a simplified version */
-static unsigned char *
-find_startcode(unsigned char *data, unsigned char *end) {
-	unsigned char *r;
-	for(r = data; r < end - 4; r++) {
-		if(r[0] == 0
-		&& r[1] == 0
-		&& r[2] == 0
-		&& r[3] == 1)
-			return r;
-	}
-	return end;
-}
-
-static int
-h264or5_get_vparam(int type, int channelId, unsigned char *data, int datalen) {
-	int ret = -1;
-	unsigned char *r;
-	unsigned char *sps = NULL, *pps = NULL, *vps = NULL;
-	int spslen = 0, ppslen = 0, vpslen = 0;
-	if(_sps[channelId] != NULL)
-		return 0;
-	r = find_startcode(data, data + datalen);
-	while(r < data + datalen) {
-		unsigned char nal_type;
-		unsigned char *r1;
-#if 0
-		if(sps != NULL && pps != NULL)
-			break;
 #endif
-		while(0 == (*r++))
-			;
-		r1 = find_startcode(r, data + datalen);
-		if(type == 265) {
-			nal_type = ((*r)>>1) & 0x3f;
-			if(nal_type == 32) {		// VPS
-				vps = r;
-				vpslen = r1 - r;
-			} else if(nal_type == 33) {	// SPS
-				sps = r;
-				spslen = r1 - r;
-			} else if(nal_type == 34) {	// PPS
-				pps = r;
-				ppslen = r1 - r;
-			}
-		} else {
-			// assume default is 264
-			nal_type = *r & 0x1f;
-			if(nal_type == 7) {		// SPS
-				sps = r;
-				spslen = r1 - r;
-			} else if(nal_type == 8) {	// PPS
-				pps = r;
-				ppslen = r1 - r;
-			}
-		}
-		r = r1;
-	}
-	if(sps != NULL && pps != NULL) {
-		// alloc and copy SPS
-		if((_sps[channelId] = (char*) malloc(spslen)) == NULL)
-			goto error_get_h264or5_vparam;
-		_spslen[channelId] = spslen;
-		bcopy(sps, _sps[channelId], spslen);
-		// alloc and copy PPS
-		if((_pps[channelId] = (char*) malloc(ppslen)) == NULL) {
-			goto error_get_h264or5_vparam;
-		}
-		_ppslen[channelId] = ppslen;
-		bcopy(pps, _pps[channelId], ppslen);
-		// alloc and copy VPS
-		if(vps != NULL) {
-			if((_vps[channelId] = (char*) malloc(vpslen)) == NULL) {
-				goto error_get_h264or5_vparam;
-			}
-			_vpslen[channelId] = vpslen;
-			bcopy(vps, _vps[channelId], vpslen);
-		}
-		//
-		if(type == 265) {
-			if(vps == NULL)
-				goto error_get_h264or5_vparam;
-			ga_error("video encoder: h.265/found sps@%d(%d); pps@%d(%d); vps@%d(%d)\n",
-				sps-data, _spslen[channelId],
-				pps-data, _ppslen[channelId],
-				vps-data, _vpslen[channelId]);
-		} else {
-			ga_error("video encoder: h.264/found sps@%d(%d); pps@%d(%d)\n",
-				sps-data, _spslen[channelId],
-				pps-data, _ppslen[channelId]);
-		}
-		//
-		ret = 0;
-	}
-	return ret;
-error_get_h264or5_vparam:
-	if(_sps[channelId])	free(_sps[channelId]);
-	if(_pps[channelId])	free(_pps[channelId]);
-	if(_vps[channelId])	free(_vps[channelId]);
-	_sps[channelId]    = _pps[channelId]    = _vps[channelId]    = NULL;
-	_spslen[channelId] = _ppslen[channelId] = _vpslen[channelId] = 0;
-	return -1;
-}
-
-static AVCodecContext *
-vencoder_opt_get_encoder(int cid) {
-	AVCodecContext *ve = NULL;
-	if(vencoder_initialized == 0)
-		return NULL;
-#ifdef STANDALONE_SDP
-	ve = vencoder_sdp[cid] ? vencoder_sdp[cid] : vencoder[cid];
-#else
-	ve = vencoder[cid];
-#endif
-	return ve;
-}
-
 static int
 vencoder_ioctl(int command, int argsize, void *arg) {
-	int ret = 0;
-	ga_ioctl_buffer_t *buf = (ga_ioctl_buffer_t*) arg;
-	AVCodecContext *ve = NULL;
-	//
-	switch(command) {
-	case GA_IOCTL_RECONFIGURE:
-		ga_error("Staging video encoder reconfiguration\n");
-		pthread_mutex_lock(&vencoder_reconf_mutex[((ga_ioctl_reconfigure_t *) arg)->id]);
-		bcopy(arg, &vencoder_reconf[((ga_ioctl_reconfigure_t *) arg)->id], sizeof(ga_ioctl_reconfigure_t));
-		pthread_mutex_unlock(&vencoder_reconf_mutex[((ga_ioctl_reconfigure_t *) arg)->id]);
-		return ret; // 0
-	case GA_IOCTL_GETSPS:
-	case GA_IOCTL_GETPPS:
-	case GA_IOCTL_GETVPS:
-		if((ve = vencoder_opt_get_encoder(buf->id)) == NULL)
-			return GA_IOCTL_ERR_BADID;
-		if(argsize != sizeof(ga_ioctl_buffer_t))
-			return GA_IOCTL_ERR_INVALID_ARGUMENT;
-		if(ve->extradata_size <= 0)
-			return GA_IOCTL_ERR_NOTFOUND;
-		if(ve->codec_id != AV_CODEC_ID_H264 && ve->codec_id != AV_CODEC_ID_H265)
-			return GA_IOCTL_ERR_NOTSUPPORTED;
-		if(ve->codec_id == AV_CODEC_ID_H264 && command == GA_IOCTL_GETVPS)
-			return GA_IOCTL_ERR_NOTSUPPORTED;
-		if(h264or5_get_vparam(ve->codec_id == AV_CODEC_ID_H264 ? 264 : 265,
-				buf->id, ve->extradata, ve->extradata_size) < 0) {
-			return GA_IOCTL_ERR_NOTFOUND;
-		}
-		if(command == GA_IOCTL_GETSPS) {
-			if(buf->size < _spslen[buf->id])
-				return GA_IOCTL_ERR_BUFFERSIZE;
-			buf->size = _spslen[buf->id];
-			bcopy(_sps[buf->id], buf->ptr, buf->size);
-		} else if(command == GA_IOCTL_GETPPS) {
-			if(buf->size < _ppslen[buf->id])
-				return GA_IOCTL_ERR_BUFFERSIZE;
-			buf->size = _ppslen[buf->id];
-			bcopy(_pps[buf->id], buf->ptr, buf->size);
-		} else if(command == GA_IOCTL_GETVPS) {
-			if(buf->size < _vpslen[buf->id])
-				return GA_IOCTL_ERR_BUFFERSIZE;
-			buf->size = _vpslen[buf->id];
-			bcopy(_vps[buf->id], buf->ptr, buf->size);
-		}
-		break;
-	default:
-		ret = GA_IOCTL_ERR_NOTSUPPORTED;
-		break;
-	}
-	return ret;
+//RAL: FIXME!! // WONT BE USED
+	return GA_IOCTL_ERR_NOTSUPPORTED;
 }
 
 ga_module_t *
@@ -670,7 +579,7 @@ module_load() {
 	m.stop = vencoder_stop;
 	m.deinit = vencoder_deinit;
 	//
-	m.raw = vencoder_raw;
+	m.raw = NULL; //vencoder_raw; //RAL: FIXME!!
 	m.ioctl = vencoder_ioctl;
 	return &m;
 }

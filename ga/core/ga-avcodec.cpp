@@ -148,7 +148,7 @@ ga_avcodec_find_decoder(const char **names, enum AVCodecID cid) {
 		return avcodec_find_decoder(cid);
 	return NULL;
 }
-
+#if 0 //RAL: FIXME!! Not used
 AVCodecContext*
 ga_avcodec_vencoder_init(AVCodecContext *ctx, AVCodec *codec, int width, int height, int fps, vector<string> *vso) {
 	AVDictionary *opts = NULL;
@@ -207,7 +207,7 @@ ga_avcodec_vencoder_init(AVCodecContext *ctx, AVCodec *codec, int width, int hei
 
 	return ctx;
 }
-
+#endif
 AVCodecContext*
 ga_avcodec_aencoder_init(AVCodecContext *ctx, AVCodec *codec, int bitrate, int samplerate, int channels, AVSampleFormat format, uint64_t chlayout) {
 	AVDictionary *opts = NULL;
@@ -247,7 +247,7 @@ ga_avcodec_aencoder_init(AVCodecContext *ctx, AVCodec *codec, int bitrate, int s
 
 	return ctx;
 }
-
+#if 1 //FIXME!! //RAL: NOT USED
 void
 ga_avcodec_close(AVCodecContext *ctx) {
 	if(ctx == NULL)
@@ -257,4 +257,5 @@ ga_avcodec_close(AVCodecContext *ctx) {
 	pthread_mutex_unlock(&avcodec_open_mutex);
 	return;
 }
+#endif
 

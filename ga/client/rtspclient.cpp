@@ -1062,7 +1062,7 @@ play_video(int channel, unsigned char *buffer, int bufsize, struct timeval pts, 
 	 * buffer (marker indicates the last fragment of the frame);
 	 * - Else, buffer overflows.
 	 */
-printf("%s %d: marker: %u\n", __FILE__, __LINE__, marker); fflush(stdout); //comment-me
+//printf("%s %d: marker: %u\n", __FILE__, __LINE__, marker); fflush(stdout); //comment-me
 	volatile static int flag_sync= 1, flag_first_frame= 0;
 	if(flag_sync && !marker) {
 		pdb->privbuflen= 0;

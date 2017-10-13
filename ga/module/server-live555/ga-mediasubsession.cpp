@@ -132,7 +132,9 @@ RTPSink* GAMediaSubsession
 					identificationHeader, identificationHeaderSize,
 					commentHeader, commentHeaderSize,
 					setupHeader, setupHeaderSize);
-	} else if(strcmp(mimetype, "video/H264") == 0) {
+	}
+#if 0 //RAL: //FIXM!!: We are not using this SPS/PPS segmenter
+	else if(strcmp(mimetype, "video/H264") == 0) {
 		ga_module_t *m = encoder_get_vencoder();
 		ga_ioctl_buffer_t mb;
 		unsigned profile_level_id = 0;
@@ -165,7 +167,9 @@ RTPSink* GAMediaSubsession
 			SPS, SPSSize, PPS, PPSSize, profile_level_id);
 		result = QoSH264VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
 				SPS, SPSSize, PPS, PPSSize/*, profile_level_id*/);
-	} else if(strcmp(mimetype, "video/H265") == 0) {
+	}
+#endif
+	else if(strcmp(mimetype, "video/H265") == 0) {
 		ga_module_t *m = encoder_get_vencoder();
 		ga_ioctl_buffer_t mb;
 		u_int8_t VPS[256]; int VPSSize = 0;
@@ -206,6 +210,9 @@ RTPSink* GAMediaSubsession
 				VPS, VPSSize, SPS, SPSSize, PPS, PPSSize/*,
 				profileSpace, profileId, tierFlag, levelId,
 				interopConstraintsStr*/);
+	} else if (strcmp(mimetype, "video/H264") == 0) { //RAL: added (temporarly)
+		result = QoSSimpleRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
+						90000, "video", "H264", 1, False/*allowMultipleFramesPerPacket*/, True /*doNormalMBitRule*/);
 	} else if(strcmp(mimetype, "video/VP8") == 0) {
 		result = QoSVP8VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic);
 	} else if(strcmp(mimetype, "video/LHE")== 0) {

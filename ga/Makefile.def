@@ -52,3 +52,9 @@ endif
 L5CF	= -I$(GADEPS)/include/live555
 L5LD	= -L$(GADEPS)/lib -lliveMedia -lBasicUsageEnvironment -lUsageEnvironment -lgroupsock
 
+# // { //RAL: Add MediaProcessors libs.
+AVCLD+= -L$(MEDIAPROCSDIR)/_install_dir_x86/lib -luriparser -lcjson \
+-lmediaprocsutils -lmediaprocs -lmediaprocscodecs -lmediaprocsmuxers
+
+CFLAGS+= -I/home/ral/workspace/MediaProcessors_selfcontained/_install_dir_x86/include
+# // } //RAL

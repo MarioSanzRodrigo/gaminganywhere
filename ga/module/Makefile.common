@@ -22,4 +22,9 @@ endif
 .m.o:
 	$(CXX) -c -g $(CFLAGS) $<
 
+# // { //RAL: Add MediaProcessors libs.
+LDFLAGS+= -L$(MEDIAPROCSDIR)/_install_dir_x86/lib -luriparser -lcjson \
+-lmediaprocsutils -lmediaprocs -lmediaprocscodecs -lmediaprocsmuxers
 
+CFLAGS+= -I/home/ral/workspace/MediaProcessors_selfcontained/_install_dir_x86/include
+# // } //RAL

@@ -43,6 +43,22 @@
 #include <syslog.h>
 #endif
 
+// { //RAL
+extern "C" {
+#include <libcjson/cJSON.h>
+
+#include <libmediaprocsutils/log.h>
+#include <libmediaprocsutils/check_utils.h>
+#include <libmediaprocsutils/stat_codes.h>
+#include <libmediaprocsutils/fifo.h>
+#include <libmediaprocsutils/schedule.h>
+#include <libmediaprocs/proc_if.h>
+#include <libmediaprocs/procs.h>
+#include <libmediaprocs/procs_api_http.h>
+#include <libmediaprocs/proc.h>
+}
+// } //RAL
+
 #if !defined(WIN32) && !defined(__APPLE__) && !defined(ANDROID)
 #include <X11/Xlib.h>
 #endif
@@ -325,6 +341,19 @@ ga_init(const char *config, const char *url) {
 	avcodec_register_all();
 	avformat_network_init();
 	//ga_dump_codecs();
+
+	{ //RAL: FIXME!!: ADDED
+	    /* Open LOG module */
+	    log_module_open();
+
+		/* Open processors (PROCS) module */
+		if(procs_module_open(NULL)!= STAT_SUCCESS) {
+			fprintf(stderr, "Error at line: %d\n", __LINE__);
+			exit(-1);
+		}
+		//FIXME!!: ADD De-init!!
+
+	} //RAL
 #endif
 	if(config != NULL) {
 		if(ga_conf_load(config) < 0) {
