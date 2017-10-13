@@ -4,8 +4,8 @@
 include Makefile.common
 
 TARGET	= asource-system vsource-desktop filter-rgb2yuv \
-	  encoder-video encoder-x264 encoder-audio ctrl-sdl \
-	  server-ffmpeg server-live555
+	  encoder-video encoder-audio ctrl-sdl \
+	  server-live555
 
 ifeq ($(shell uname -s),Linux)
 TARGET	+= asource-alsa asource-pulseaudio
