@@ -159,10 +159,7 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	SDL_Renderer *renderer = NULL;
 	SDL_Texture *overlay = NULL;
 	struct SwsContext *swsctx = NULL;
-	dpipe_t *pipe = NULL;
-	dpipe_buffer_t *data = NULL;
 	char windowTitle[64];
-	char pipename[64];
 	//
 	pthread_mutex_lock(&rtspParam->surfaceMutex[ch]);
 	if(rtspParam->surface[ch] != NULL) {
@@ -180,22 +177,6 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 		exit(-1);
 	}
 
-#if 1 //RAL
-#else
-	// pipeline
-	snprintf(pipename, sizeof(pipename), "channel-%d", ch);
-	if((pipe = dpipe_create(ch, pipename, POOLSIZE, sizeof(AVPicture))) == NULL) {
-		rtsperror("ga-client: cannot create pipeline.\n");
-		exit(-1);
-	}
-	for(data = pipe->in; data != NULL; data = data->next) {
-		bzero(data->pointer, sizeof(AVPicture));
-		if(avpicture_alloc((AVPicture*) data->pointer, AV_PIX_FMT_YUV420P, w, h) != 0) {
-			rtsperror("ga-client: per frame initialization failed.\n");
-			exit(-1);
-		}
-	}
-#endif
 	// sdl
 	int wflag = 0;
 	wflag |= SDL_WINDOW_RESIZABLE;

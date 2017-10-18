@@ -40,12 +40,12 @@ extern "C" {
 //	vsource -- [vsource-%d] --> filter -- [filter-%d] --> encoder
 
 // configurations:
-static char *imagepipefmt = "video-%d";
-static char *filterpipefmt = "filter-%d";
-static char *imagepipe0 = "video-0";
-static char *filterpipe0 = "filter-0";
-static char *filter_param[] = { imagepipefmt, filterpipefmt };
-static void *audio_encoder_param = NULL;
+static char *imagepipefmt= (char*)"video-%d";
+static char *filterpipefmt= (char*)"filter-%d";
+static char *imagepipe0= (char*)"video-0";
+static char *filterpipe0= (char*)"filter-0";
+static char *filter_param[]= { imagepipefmt, filterpipefmt };
+static void *audio_encoder_param= NULL;
 
 static struct gaRect *prect = NULL;
 static struct gaRect rect;
@@ -179,21 +179,6 @@ run_modules() {
 	encoder_register_aencoder(m_aencoder, (void*)&aencoder_arg);
 	//////////////////////////
 	}
-/*	// initialize video encoder
-	if(m_vencoder != NULL && m_vencoder->init != NULL) {
-		if(m_vencoder->init((void*)vencoder_arg) < 0) {
-			ga_error("video encoder: init failed.\n");
-			exit(-1);;
-		}
-	}
-	// initialize audio encoder
-	if(m_aencoder != NULL && m_aencoder->init != NULL) {
-		if(m_aencoder->init(audio_encoder_param) < 0) {
-			ga_error("audio encoder: init failed.\n");
-			exit(-1);
-		}
-	}*/ //RAL: FIXME!!
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 	// start video encoder
 	if(m_vencoder != NULL && m_vencoder->start != NULL) {
 		if(m_vencoder->start((void*)&vencoder_arg) < 0) {
@@ -201,7 +186,6 @@ printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 			exit(-1);
 		}
 	}
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 	// start audio encoder
 	if(ga_conf_readbool("enable-audio", 1)!= 0 && m_aencoder!= NULL &&
 			m_aencoder->start!= NULL) {
@@ -210,71 +194,11 @@ printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 			exit(-1);
 		}
 	}
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 	// server
 	if(m_server->start(NULL) < 0) exit(-1);
 	//
 	return 0;
 }
-
-#ifdef TEST_RECONFIGURE
-static void *
-test_reconfig(void *) {
-	int s = 0, err;
-	int kbitrate[] = { 3000, 100 };
-	int framerate[][2] = { { 12, 1 }, {30, 1}, {24, 1} };
-	ga_error("reconfigure thread started ...\n");
-	while(1) {
-		ga_ioctl_reconfigure_t reconf;
-		if(encoder_running() == 0) {
-#ifdef WIN32
-			Sleep(1);
-#else
-			sleep(1);
-#endif
-			continue;
-		}
-#ifdef WIN32
-		Sleep(20 * 1000);
-#else
-		sleep(3);
-#endif
-		bzero(&reconf, sizeof(reconf));
-		reconf.id = 0;
-		reconf.bitrateKbps = kbitrate[s%2];
-#if 0
-		reconf.bufsize = 5 * kbitrate[s%2] / 24;
-#endif
-		// reconf.framerate_n = framerate[s%3][0];
-		// reconf.framerate_d = framerate[s%3][1];
-		// vsource
-		/*
-		if(m_vsource->ioctl) {
-			err = m_vsource->ioctl(GA_IOCTL_RECONFIGURE, sizeof(reconf), &reconf);
-			if(err < 0) {
-				ga_error("reconfigure vsource failed, err = %d.\n", err);
-			} else {
-				ga_error("reconfigure vsource OK, framerate=%d/%d.\n",
-						reconf.framerate_n, reconf.framerate_d);
-			}
-		}
-		*/
-		// encoder
-		if(m_vencoder->ioctl) {
-			err = m_vencoder->ioctl(GA_IOCTL_RECONFIGURE, sizeof(reconf), &reconf);
-			if(err < 0) {
-				ga_error("reconfigure encoder failed, err = %d.\n", err);
-			} else {
-				ga_error("reconfigure encoder OK, bitrate=%d; bufsize=%d; framerate=%d/%d.\n",
-						reconf.bitrateKbps, reconf.bufsize,
-						reconf.framerate_n, reconf.framerate_d);
-			}
-		}
-		s = (s + 1) % 6;
-	}
-	return NULL;
-}
-#endif
 
 void
 handle_netreport(ctrlmsg_system_t *msg) {

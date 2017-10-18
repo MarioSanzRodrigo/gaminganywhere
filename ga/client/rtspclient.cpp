@@ -398,8 +398,8 @@ static void* consumer_thr_video(void *t)
 		if(proc_frame_ctx== NULL) {
 			continue;
 		}
-		printf("got decoded frame! (%dx%d)\n", proc_frame_ctx->width[0],
-				proc_frame_ctx->height[0]); fflush(stdout); //comment-me
+		printf("got decoded frame! (%dx%d)\n", (int)proc_frame_ctx->width[0],
+				(int)proc_frame_ctx->height[0]); fflush(stdout); //comment-me
 
 		/* Write frame to input FIFO.
 		 * Implementation note: we just pass the frame pointer, do not
@@ -408,7 +408,7 @@ static void* consumer_thr_video(void *t)
 		ret_code= fifo_put(rtspThreadParam->fifo_ctx_video_array[iid],
 				(void**)&proc_frame_ctx, sizeof(void*));
 		if(ret_code== STAT_SUCCESS)
-			proc_frame_ctx== NULL; // succeed, avoid double referencing
+			proc_frame_ctx= NULL; // succeed, avoid double referencing
 
 		/* Push rendering event */
 		memset(&evt, 0, sizeof(evt));

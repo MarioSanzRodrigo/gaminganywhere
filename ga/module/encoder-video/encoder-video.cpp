@@ -343,7 +343,7 @@ static void *vencoder_threadproc(void *arg)
 		goto end;
 	}
 	iid= vencoder_thread->iid;
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout); //FIXME!!
+
 	/* Get "pipe" */
 	snprintf(pipename, sizeof(pipename), pipefmt, iid);
 	if((pipe = dpipe_lookup(pipename)) == NULL) {
@@ -375,7 +375,7 @@ printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout); //F
 		ga_gettid(),
 		outputW, outputH, rtspconf->video_fps, pic_in_size);
 	//
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout); //FIXME!!
+
 	while(vencoder_arg->flag_has_started!= 0) {
 		proc_frame_ctx_t proc_frame_ctx= {0};
 		struct timeval tv;
@@ -383,7 +383,7 @@ printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout); //F
 		gettimeofday(&tv, NULL);
 		to.tv_sec = tv.tv_sec+1;
 		to.tv_nsec = tv.tv_usec * 1000;
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout); //FIXME!!
+
 		/* Release frame pool of past iteration (frame was consumed) */
 		if(data!= NULL)
 			dpipe_put(pipe, data);
@@ -424,7 +424,6 @@ printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout); //F
 		encoder_pts_put(iid, pts, &tv);
 		pic_in->pts = pts;
 
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout); //FIXME!!
 	    proc_frame_ctx.data= pic_in_buf;
 	    proc_frame_ctx.p_data[0]= pic_in->data[0];
 	    proc_frame_ctx.p_data[1]= pic_in->data[1];
