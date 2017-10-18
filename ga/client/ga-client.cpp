@@ -22,7 +22,7 @@
 #include <pthread.h>
 #include <SDL2/SDL.h>
 #ifndef ANDROID
-#include <SDL2/SDL_ttf.h>
+//#include <SDL2/SDL_ttf.h>
 #endif /* ! ANDROID */
 #ifndef WIN32
 #include <unistd.h>
@@ -95,7 +95,7 @@ static map<unsigned int, int> windowId2ch;
 // save files
 static FILE *savefp_keyts = NULL;
 
-#ifndef ANDROID
+#if 0 //#ifndef ANDROID
 #define	DEFAULT_FONT		"FreeSans.ttf"
 #define	DEFAULT_FONTSIZE	24
 static TTF_Font *defFont = NULL;
@@ -338,7 +338,7 @@ open_audio(struct RTSPThreadParam *rtspParam, AVCodecContext *adecoder) {
 // negative x or y means centering-x and centering-y, respectively
 static void
 render_text(SDL_Renderer *renderer, SDL_Window *window, int x, int y, int line, const char *text) {
-#ifdef ANDROID
+#if 1 //#ifdef ANDROID
 	// not supported
 #else
 	SDL_Color textColor = {255, 255, 255};
@@ -771,7 +771,7 @@ main(int argc, char *argv[]) {
 		return -1;
 	}
 #endif
-#ifndef ANDROID
+#if 0 //#ifndef ANDROID
 	// init fonts
 	if(TTF_Init() != 0) {
 		rtsperror("cannot initialize SDL_ttf: %s\n", SDL_GetError());

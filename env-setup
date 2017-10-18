@@ -1,10 +1,5 @@
 #!/bin/sh
-export GADEPS=$HOME/myprog/gaminganywhere/deps.posix
+export MEDIAPROCSDIR=<... put corresponding path ...>/MediaProcessors_selfcontained/_install_dir_x86
+export GADEPS=$MEDIAPROCSDIR
 export PKG_CONFIG_PATH=$GADEPS/lib/pkgconfig:/opt/local/lib/pkgconfig:/usr/lib/i386-linux-gnu/pkgconfig/:/usr/lib/pkgconfig
 export PATH=$GADEPS/bin:$PATH
-
-#{ //RAL
-#Comment: Despite is not the good way, we will define FFmpeg source folder in environments.
-export FFMPEGDIR=<define my FFmpeg dir>
-export LIVE555DIR=<define my live555 dir>
-#}
