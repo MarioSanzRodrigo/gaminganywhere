@@ -116,13 +116,14 @@ rtspconf_load_codec(const char *key, const char *value,
 	} while(++idx<RTSPCONF_CODECNAME_SIZE && (token=strtok_r(NULL, DELIM, &saveptr))!=NULL);
 	names[idx] = NULL;
 	//
-	if((*codec = finder(names, AV_CODEC_ID_NONE)) == NULL) {
-		ga_error("# RTSP[config]: no available %s codecs (%s).\n", key, value);
-		return -1;
-	}
+//	if((*codec = finder(names, AV_CODEC_ID_NONE)) == NULL) {
+//		ga_error("# RTSP[config]: no available %s codecs (%s).\n", key, value);
+//		return -1;
+//	}
 	//
-	ga_error("# RTSP[config]: %s = %s (%s)\n", key, (*codec)->name,
-		(*codec)->long_name == NULL ? "N/A" : (*codec)->long_name);
+//	ga_error("# RTSP[config]: %s = %s (%s)\n", key, (*codec)->name,
+//		(*codec)->long_name == NULL ? "N/A" : (*codec)->long_name);
+	ga_error("# RTSP[config]: %s = %s (%s)\n", key, value);
 	return 0;
 }
 

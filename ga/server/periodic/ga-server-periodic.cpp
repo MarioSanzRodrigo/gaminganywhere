@@ -29,6 +29,11 @@
 #include "controller.h"
 #include "encoder-common.h"
 
+/* MediaProcessors's library related */
+extern "C" {
+#include <libmediaprocs/procs.h>
+}
+
 //#define	TEST_RECONFIGURE //RAL: do not reconfigure by the moment
 
 // image source pipeline:
@@ -40,13 +45,33 @@ static char *filterpipefmt = "filter-%d";
 static char *imagepipe0 = "video-0";
 static char *filterpipe0 = "filter-0";
 static char *filter_param[] = { imagepipefmt, filterpipefmt };
-static char *video_encoder_param = filterpipefmt;
 static void *audio_encoder_param = NULL;
 
 static struct gaRect *prect = NULL;
 static struct gaRect rect;
 
 static ga_module_t *m_vsource, *m_filter, *m_vencoder, *m_asource, *m_aencoder, *m_ctrl, *m_server;
+static procs_ctx_t *procs_ctx= NULL;
+static rtsp_server_arg_t rtsp_server_arg= {
+		.rtsp_conf= NULL,
+		.procs_ctx= NULL,
+		.muxer_proc_id= -1
+};
+static vencoder_arg_t vencoder_arg= {
+		.rtsp_conf= NULL,
+		.mime= NULL,
+		.pipefmt= NULL,
+		.procs_ctx= NULL,
+		.muxer_proc_id= -1,
+		.flag_is_initialized= 0,
+		.flag_has_started= 0
+};
+static aencoder_arg_t aencoder_arg= {
+		.rtsp_conf= NULL,
+		.mime= NULL,
+		.procs_ctx= NULL,
+		.muxer_proc_id= -1
+};
 
 int
 load_modules() {
@@ -82,21 +107,49 @@ init_modules() {
 	}
 	// controller server is built-in - no need to init
 	// note the order of the two modules ...
+
 	ga_init_single_module_or_quit("video-source", m_vsource, (void*) prect);
 	ga_init_single_module_or_quit("filter", m_filter, (void*) filter_param);
-	//
-	ga_init_single_module_or_quit("video-encoder", m_vencoder, filterpipefmt);
-	if(ga_conf_readbool("enable-audio", 1) != 0) {
-	//////////////////////////
-#ifndef __APPLE__
-	ga_init_single_module_or_quit("audio-source", m_asource, NULL);
-#endif
-	ga_init_single_module_or_quit("audio-encoder", m_aencoder, NULL);
-	//////////////////////////
+
+	/* Create PROCS module insance to be used for audio and video codecs */
+	if((procs_ctx= procs_open(NULL))== NULL) {
+		ga_error("Could not instantiate processors module.\n");
+		exit(-1);
 	}
-	//
-	ga_init_single_module_or_quit("server-live555", m_server, NULL);
-	//
+printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
+	/* Initialize server module (before encoding modules) */
+	rtsp_server_arg.rtsp_conf= conf;
+	rtsp_server_arg.procs_ctx= procs_ctx;
+	rtsp_server_arg.muxer_proc_id= -1; // Initialize to invlid value
+	ga_init_single_module_or_quit("server-live555", m_server,
+			(void*)&rtsp_server_arg);
+printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
+
+	/* Initialize video encoders */
+	vencoder_arg.rtsp_conf= conf;
+	vencoder_arg.mime= (m_vencoder->mimetype!= NULL)?
+			strdup(m_vencoder->mimetype): (char*)"video/NONE";
+	vencoder_arg.pipefmt= filterpipefmt;
+	vencoder_arg.procs_ctx= procs_ctx;
+	vencoder_arg.muxer_proc_id= rtsp_server_arg.muxer_proc_id;
+	ga_init_single_module_or_quit("video-encoder", m_vencoder,
+			(void*)&vencoder_arg);
+printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
+	/* Initialize audio encoders */
+	if(ga_conf_readbool("enable-audio", 1) != 0) {
+		aencoder_arg.rtsp_conf= conf;
+		vencoder_arg.mime= (m_aencoder->mimetype!= NULL)?
+				strdup(m_aencoder->mimetype): (char*)"audio/NONE";
+		aencoder_arg.procs_ctx= procs_ctx;
+		aencoder_arg.muxer_proc_id= rtsp_server_arg.muxer_proc_id;
+#ifndef __APPLE__
+		ga_init_single_module_or_quit("audio-source", m_asource,
+				(void*)&aencoder_arg);
+#endif
+		ga_init_single_module_or_quit("audio-encoder", m_aencoder,
+				(void*)&aencoder_arg);
+	}
+printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 	return 0;
 }
 
@@ -115,7 +168,7 @@ run_modules() {
 	if(m_vsource->start(prect) < 0)		exit(-1);
 	//ga_run_single_module_or_quit("filter 0", m_filter->threadproc, (void*) filterpipe);
 	if(m_filter->start(filter_param) < 0)	exit(-1);
-	encoder_register_vencoder(m_vencoder, video_encoder_param);
+	encoder_register_vencoder(m_vencoder, (void*)&vencoder_arg);
 	// audio
 	if(ga_conf_readbool("enable-audio", 1) != 0) {
 	//////////////////////////
@@ -123,11 +176,43 @@ run_modules() {
 	//ga_run_single_module_or_quit("audio source", m_asource->threadproc, NULL);
 	if(m_asource->start(NULL) < 0)		exit(-1);
 #endif
-	encoder_register_aencoder(m_aencoder, audio_encoder_param);
+	encoder_register_aencoder(m_aencoder, (void*)&aencoder_arg);
 	//////////////////////////
 	}
+/*	// initialize video encoder
+	if(m_vencoder != NULL && m_vencoder->init != NULL) {
+		if(m_vencoder->init((void*)vencoder_arg) < 0) {
+			ga_error("video encoder: init failed.\n");
+			exit(-1);;
+		}
+	}
+	// initialize audio encoder
+	if(m_aencoder != NULL && m_aencoder->init != NULL) {
+		if(m_aencoder->init(audio_encoder_param) < 0) {
+			ga_error("audio encoder: init failed.\n");
+			exit(-1);
+		}
+	}*/ //RAL: FIXME!!
+printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
+	// start video encoder
+	if(m_vencoder != NULL && m_vencoder->start != NULL) {
+		if(m_vencoder->start((void*)&vencoder_arg) < 0) {
+			ga_error("video encoder: start failed.\n");
+			exit(-1);
+		}
+	}
+printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
+	// start audio encoder
+	if(ga_conf_readbool("enable-audio", 1)!= 0 && m_aencoder!= NULL &&
+			m_aencoder->start!= NULL) {
+		if(m_aencoder->start((void*)&aencoder_arg) < 0) {
+			ga_error("audio encoder: start failed.\n");
+			exit(-1);
+		}
+	}
+printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 	// server
-	if(m_server->start(NULL) < 0)		exit(-1);
+	if(m_server->start(NULL) < 0) exit(-1);
 	//
 	return 0;
 }

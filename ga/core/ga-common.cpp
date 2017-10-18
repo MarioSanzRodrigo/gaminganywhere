@@ -43,21 +43,16 @@
 #include <syslog.h>
 #endif
 
-// { //RAL
+/* MediaProcessors's library related */
 extern "C" {
-#include <libcjson/cJSON.h>
-
 #include <libmediaprocsutils/log.h>
-#include <libmediaprocsutils/check_utils.h>
 #include <libmediaprocsutils/stat_codes.h>
-#include <libmediaprocsutils/fifo.h>
-#include <libmediaprocsutils/schedule.h>
-#include <libmediaprocs/proc_if.h>
 #include <libmediaprocs/procs.h>
-#include <libmediaprocs/procs_api_http.h>
-#include <libmediaprocs/proc.h>
+#include <libmediaprocscodecs/ffmpeg_x264.h>
+#include <libmediaprocscodecs/ffmpeg_m2v.h>
+#include <libmediaprocscodecs/ffmpeg_lhe.h>
+#include <libmediaprocsmuxers/live555_rtsp.h>
 }
-// } //RAL
 
 #if !defined(WIN32) && !defined(__APPLE__) && !defined(ANDROID)
 #include <X11/Xlib.h>
@@ -342,18 +337,59 @@ ga_init(const char *config, const char *url) {
 	avformat_network_init();
 	//ga_dump_codecs();
 
-	{ //RAL: FIXME!!: ADDED
-	    /* Open LOG module */
-	    log_module_open();
+	/* Open LOG module used by MediaProcessors library*/
+	log_module_open();
 
-		/* Open processors (PROCS) module */
-		if(procs_module_open(NULL)!= STAT_SUCCESS) {
-			fprintf(stderr, "Error at line: %d\n", __LINE__);
-			exit(-1);
-		}
-		//FIXME!!: ADD De-init!!
+	/* Open MediaProcessors's processors (PROCS) module */
+	if(procs_module_open(NULL)!= STAT_SUCCESS) {
+		ga_error("GA: Could not open 'PROCS' module\n");
+		return -1;
+	}
 
-	} //RAL
+	/* Register encoders, decoders, RTSP multiplexer and RTSP de-multiplexer
+	 * processor types.
+	 */
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_x264_enc)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_m2v_enc)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_mlhe_enc)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_live555_rtsp_mux)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_x264_dec)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_m2v_dec)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_mlhe_dec)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+	/* Register RTSP de-multiplexer processor types */
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_live555_rtsp_dmux)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
 #endif
 	if(config != NULL) {
 		if(ga_conf_load(config) < 0) {
@@ -375,6 +411,13 @@ ga_init(const char *config, const char *url) {
  */
 void
 ga_deinit() {
+
+	/* Close MediaProcessors's processors (PROCS) module */
+	procs_module_close();
+
+	/* Close LOG module used by MediaProcessors library*/
+	log_module_close();
+
 	return;
 }
 

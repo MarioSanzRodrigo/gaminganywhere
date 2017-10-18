@@ -30,6 +30,9 @@
 #include "ga-avcodec.h"
 #include "ga-module.h"
 
+/* Forward declarations */
+typedef struct procs_ctx_s procs_ctx_t;
+
 /*
  * Packet format for encoder packet queue.
  *
@@ -54,9 +57,33 @@ typedef struct encoder_packet_queue_s {
 }	encoder_packet_queue_t;
 
 typedef struct encoder_pts_s {
+	struct RTSPConf *rtsp_conf;
 	long long pts;
 	struct timeval ptv;
 }	encoder_pts_t;
+
+/**
+ * Opaque argument for video encoder initialization.
+ */
+typedef struct vencoder_arg_s {
+	struct RTSPConf *rtsp_conf;
+	char *mime;
+	char *pipefmt;
+	procs_ctx_t *procs_ctx;
+	volatile int muxer_proc_id;
+	volatile int flag_is_initialized;
+	volatile int flag_has_started;
+} vencoder_arg_t;
+
+/**
+ * Opaque argument for audio encoder initialization.
+ */
+typedef struct aencoder_arg_s {
+	struct RTSPConf *rtsp_conf;
+	char *mime;
+	procs_ctx_t *procs_ctx;
+	volatile int muxer_proc_id;
+} aencoder_arg_t;
 
 typedef void (*qcallback_t)(int);
 

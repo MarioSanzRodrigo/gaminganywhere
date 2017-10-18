@@ -98,12 +98,20 @@ encoder_running() {
  */
 int
 encoder_register_vencoder(ga_module_t *m, void *param) {
+	vencoder_arg_t *vencoder_arg= (vencoder_arg_t*)param;
+
+	/* Check arguments */
+	if(vencoder_arg== NULL) {
+		ga_error("Bad arguments at 'encoder_register_vencoder()'\n");
+		return -1;
+	}
+
 	if(vencoder != NULL) {
 		ga_error("encoder: warning - replace video encoder %s with %s\n",
 			vencoder->name, m->name);
 	}
 	vencoder = m;
-	vencoder_param = param;
+	vencoder_param = (void*)vencoder_arg;
 	ga_error("video encoder: %s registered\n", m->name);
 	return 0;
 }
@@ -120,12 +128,19 @@ encoder_register_vencoder(ga_module_t *m, void *param) {
  */
 int
 encoder_register_aencoder(ga_module_t *m, void *param) {
+	aencoder_arg_t *aencoder_arg= (aencoder_arg_t*)param;
+
+	/* Check arguments */
+	if(aencoder_arg== NULL) {
+		ga_error("Bad arguments at 'encoder_register_aencoder()'\n");
+		return -1;
+	}
 	if(aencoder != NULL) {
 		ga_error("encoder warning - replace audio encoder %s with %s\n",
 			aencoder->name, m->name);
 	}
 	aencoder = m;
-	aencoder_param = param;
+	aencoder_param = (void*)aencoder_arg;
 	ga_error("audio encoder: %s registered\n", m->name);
 	return 0;
 }
@@ -207,7 +222,7 @@ encoder_get_sinkserver() {
  * game clients, but the \a server-live module only registered one.
  */
 int
-encoder_register_client(void /*RTSPContext*/ *rtsp) {
+encoder_register_client(void /*RTSPContext*/ *rtsp) { //RAL: FIXME!! Will not be used!!
 	pthread_rwlock_wrlock(&encoder_lock);
 	if(encoder_clients.size() == 0) {
 		// initialize video encoder
@@ -684,4 +699,3 @@ encoder_pktqueue_unregister_callback(int channelId, qcallback_t cb) {
 	queue_cb[channelId].erase(cb);
 	return 0;
 }
-

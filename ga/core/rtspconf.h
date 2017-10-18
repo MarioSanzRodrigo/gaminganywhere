@@ -42,6 +42,18 @@ extern "C" {
 #define	RTSPCONF_PROTO_SIZE	8
 #define	RTSPCONF_CODECNAME_SIZE	8
 
+/* Forward declarations */
+typedef struct procs_ctx_s procs_ctx_t;
+
+/**
+ * Opaque argument for server initialization.
+ */
+typedef struct rtsp_server_arg_s {
+	struct RTSPConf *rtsp_conf;
+	procs_ctx_t *procs_ctx;
+	volatile int muxer_proc_id;
+} rtsp_server_arg_t;
+
 struct RTSPConf {
 	int initialized;
 	char object[RTSPCONF_OBJECT_SIZE];

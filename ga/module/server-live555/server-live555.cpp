@@ -34,61 +34,134 @@
 #include "encoder-common.h"
 #include "rtspconf.h"
 
-#include "ga-liveserver.h"
 #include "server-live555.h"
 
-static pthread_t server_tid;
-
-int
-live_server_register_client(void *ccontext) {
-	if(encoder_register_client(ccontext) < 0)
-		return -1;
-	return 0;
+/* MediaProcessors's library related */
+extern "C" {
+#include <libcjson/cJSON.h>
+#include <libmediaprocsutils/log.h>
+#include <libmediaprocsutils/check_utils.h>
+#include <libmediaprocsutils/stat_codes.h>
+#include <libmediaprocsutils/fifo.h>
+#include <libmediaprocsutils/schedule.h>
+#include <libmediaprocs/proc_if.h>
+#include <libmediaprocs/procs.h>
 }
 
-int
-live_server_unregister_client(void *ccontext) {
-	if(encoder_unregister_client(ccontext) < 0)
-		return -1;
-	return 0;
-}
+/* Prototypes */
+static int live_server_deinit(void *arg);
 
-static int
-live_server_init(void *arg) {
-	// nothing to do now
-	return 0;
-}
+static int live_server_init(void *arg)
+{
+	char *p_stream_name;
+	int ret_code, end_code= -1;
+	rtsp_server_arg_t *rtsp_server_arg= (rtsp_server_arg_t*)arg;
+	struct RTSPConf *rtspconf= NULL;
+	procs_ctx_t *procs_ctx= NULL;
+	char proc_settings[512]= {0};
+	char *rest_str= NULL;
+	cJSON *cjson_rest= NULL, *cjson_aux= NULL;
 
-static int
-live_server_start(void *arg) {
-	pthread_cancel_init();
-	if(pthread_create(&server_tid, NULL, liveserver_main, NULL) != 0) {
-		ga_error("start live-server failed.\n");
+	/* Check arguments */
+	if(rtsp_server_arg== NULL) {
+		ga_error("Bad arguments at 'live_server_init()'\n");
 		return -1;
 	}
+
+	if((rtspconf= rtsp_server_arg->rtsp_conf)== NULL) {
+		ga_error("server: no configuration found\n");
+		return -1;
+	}
+	if((procs_ctx= rtsp_server_arg->procs_ctx)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return -1;
+	}
+
+	/* Compose server initial settings */
+	p_stream_name= rtspconf->object;
+	if(p_stream_name!= NULL && strlen(p_stream_name+ 1)> 0)
+		p_stream_name+= 1;
+	else
+		p_stream_name= "ga";
+	snprintf(proc_settings, sizeof(proc_settings), "rtsp_port=%d"
+			"&rtsp_streaming_session_name=%s",
+			rtspconf->serverport> 0? rtspconf->serverport: 8554, p_stream_name);
+
+	/* Register RTSP multiplexer in PROCS module */
+	ret_code= procs_opt(procs_ctx, "PROCS_POST", "live555_rtsp_mux",
+			proc_settings, &rest_str);
+	if(ret_code!= STAT_SUCCESS || rest_str== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if(ret_code!= STAT_SUCCESS || rest_str== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((cjson_rest= cJSON_Parse(rest_str))== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((cjson_aux= cJSON_GetObjectItem(cjson_rest, "proc_id"))== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((rtsp_server_arg->muxer_proc_id= cjson_aux->valuedouble)< 0) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	free(rest_str); rest_str= NULL;
+	cJSON_Delete(cjson_rest); cjson_rest= NULL;
+
+	end_code= 0; // "SUCCESS"
+end:
+	if(cjson_rest!= NULL)
+		cJSON_Delete(cjson_rest);
+	if(rest_str!= NULL)
+		free(rest_str);
+	if(end_code!= 0) // error occurred
+		live_server_deinit(arg);
+	return end_code;
+}
+
+static int live_server_start(void *arg)
+{
 	return 0;
 }
 
-static int
-live_server_stop(void *arg) {
-	pthread_cancel(server_tid);
+static int live_server_stop(void *arg)
+{
 	return 0;
 }
 
-static int
-live_server_deinit(void *arg) {
-	// nothing to do now
+static int live_server_deinit(void *arg)
+{
+	rtsp_server_arg_t *rtsp_server_arg= (rtsp_server_arg_t*)arg;
+	procs_ctx_t *procs_ctx= NULL;
+
+	/* Check arguments */
+	if(rtsp_server_arg== NULL) {
+		ga_error("Bad arguments at 'live_server_deinit()'\n");
+		return -1;
+	}
+
+	if((procs_ctx= rtsp_server_arg->procs_ctx)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return -1;
+	}
+
+	if(procs_opt(procs_ctx, "PROCS_ID_DELETE", rtsp_server_arg->muxer_proc_id)
+			!= STAT_SUCCESS) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return -1;
+	}
+	rtsp_server_arg->muxer_proc_id= -1; // Set to invalid value
+
 	return 0;
 }
 
-static int
-live_server_send_packet(const char *prefix, int channelId, AVPacket *pkt, int64_t encoderPts, struct timeval *ptv) {
-	encoder_pktqueue_append(channelId, pkt, encoderPts, ptv);
-	return 0;
-}
-
-ga_module_t *
-module_load() {
+ga_module_t* module_load()
+{
 	static ga_module_t m;
 	//
 	bzero(&m, sizeof(m));
@@ -98,10 +171,6 @@ module_load() {
 	m.start = live_server_start;
 	m.stop = live_server_stop;
 	m.deinit = live_server_deinit;
-	m.send_packet = live_server_send_packet;
-	//
-	encoder_register_sinkserver(&m);
-	//
+	m.send_packet = NULL;
 	return &m;
 }
-

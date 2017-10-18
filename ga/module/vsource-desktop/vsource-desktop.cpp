@@ -209,7 +209,7 @@ vsource_threadproc(void *arg) {
 	token = frame_interval;
 	while(vsource_started != 0) {
 		// encoder has not launched?
-		if(encoder_running() == 0) {
+		if(0/*encoder_running() == 0*/) { //RAL: FIXME!!
 #ifdef WIN32
 			Sleep(1);
 #else

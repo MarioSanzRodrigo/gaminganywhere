@@ -56,6 +56,21 @@ extern "C" {
 #include <map>
 using namespace std;
 
+/* MediaProcessors's library related */
+extern "C" {
+#include <libcjson/cJSON.h>
+#include <libmediaprocsutils/log.h>
+#include <libmediaprocsutils/stat_codes.h>
+#include <libmediaprocsutils/fifo.h>
+#include <libmediaprocs/proc_if.h>
+#include <libmediaprocs/procs.h>
+#include <libmediaprocsmuxers/live555_rtsp.h>
+#include <libmediaprocscodecs/ffmpeg_x264.h>
+#include <libmediaprocscodecs/ffmpeg_m2v.h>
+#include <libmediaprocscodecs/ffmpeg_mp3.h>
+#include <libmediaprocscodecs/ffmpeg_lhe.h>
+}
+
 #define	POOLSIZE	16
 
 #define	IDLE_MAXIMUM_THRESHOLD		3600000	/* us */
@@ -138,13 +153,11 @@ static void
 create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	int w, h;
 	AVPixelFormat format;
-#if 1	// only support SDL2
 	unsigned int renderer_flags = 0;
 	int renderer_index = -1;
 	SDL_Window *surface = NULL;
 	SDL_Renderer *renderer = NULL;
 	SDL_Texture *overlay = NULL;
-#endif
 	struct SwsContext *swsctx = NULL;
 	dpipe_t *pipe = NULL;
 	dpipe_buffer_t *data = NULL;
@@ -166,6 +179,9 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 		rtsperror("ga-client: cannot create swsscale context.\n");
 		exit(-1);
 	}
+
+#if 1 //RAL
+#else
 	// pipeline
 	snprintf(pipename, sizeof(pipename), "channel-%d", ch);
 	if((pipe = dpipe_create(ch, pipename, POOLSIZE, sizeof(AVPicture))) == NULL) {
@@ -179,17 +195,13 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 			exit(-1);
 		}
 	}
+#endif
 	// sdl
 	int wflag = 0;
-#if 1	// only support SDL2
-#ifdef	ANDROID
-	wflag = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS;
-#else
 	wflag |= SDL_WINDOW_RESIZABLE;
 	if(ga_conf_readbool("fullscreen", 0) != 0) {
 		wflag |= SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_BORDERLESS;
 	}
-#endif
 	if(relativeMouseMode != 0) {
 		wflag |= SDL_WINDOW_INPUT_GRABBED;
 	}
@@ -197,7 +209,6 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	surface = SDL_CreateWindow(windowTitle,
 			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 			w, h, wflag);
-#endif
 	if(surface == NULL) {
 		rtsperror("ga-client: set video mode (create window) failed.\n");
 		exit(-1);
@@ -208,9 +219,7 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	nativeSizeY[ch] = windowSizeY[ch] = h;
 	windowId2ch[SDL_GetWindowID(surface)] = ch;
 	// move mouse to center
-#if 1	// only support SDL2
 	SDL_WarpMouseInWindow(surface, w/2, h/2);
-#endif
 	if(relativeMouseMode != 0) {
 		SDL_SetRelativeMouseMode(SDL_TRUE);
 		showCursor = 0;
@@ -224,7 +233,6 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 		ga_error("ga-client: relative mouse mode enabled.\n");
 	}
 	//
-#if 1	// only support SDL2
 	do {	// choose SW or HW renderer?
 		// XXX: Windows crashed if there is not a HW renderer!
 		int i, n = SDL_GetNumRenderDrivers();
@@ -266,20 +274,16 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 			SDL_PIXELFORMAT_YV12,
 			SDL_TEXTUREACCESS_STREAMING,
 			w, h);
-#endif
 	if(overlay == NULL) {
 		rtsperror("ga-client: create overlay (textuer) failed.\n");
 		exit(-1);
 	}
 	//
 	pthread_mutex_lock(&rtspParam->surfaceMutex[ch]);
-	rtspParam->pipe[ch] = pipe;
 	rtspParam->swsctx[ch] = swsctx;
 	rtspParam->overlay[ch] = overlay;
-#if 1	// only support SDL2
 	rtspParam->renderer[ch] = renderer;
 	rtspParam->windowId[ch] = SDL_GetWindowID(surface);
-#endif
 	rtspParam->surface[ch] = surface;
 	pthread_mutex_unlock(&rtspParam->surfaceMutex[ch]);
 	//
@@ -289,6 +293,8 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	gettimeofday(&watchdogTimer, NULL);
 	pthread_mutex_unlock(&watchdogMutex);
 	//
+	// RAL: Should implement "release" code in case of error...
+	// There is no destroying renderer, window, etc...!!
 	return;
 }
 
@@ -307,7 +313,7 @@ open_audio(struct RTSPThreadParam *rtspParam, AVCodecContext *adecoder) {
 	wanted.channels = rtspconf->audio_channels;
 	wanted.silence = 0;
 	wanted.samples = SDL_AUDIO_BUFFER_SIZE;
-	wanted.callback = audio_buffer_fill_sdl;
+	wanted.callback = NULL; //audio_buffer_fill_sdl; //FIXME!! //RAL
 	wanted.userdata = adecoder;
 	//
 	pthread_mutex_lock(&rtspParam->audioMutex);
@@ -377,23 +383,107 @@ render_text(SDL_Renderer *renderer, SDL_Window *window, int x, int y, int line, 
 	return;
 }
 
-#if 1
-static void
-render_image(struct RTSPThreadParam *rtspParam, int ch) {
+static void render_image(struct RTSPThreadParam *rtspThreadParam, int ch)
+{
+#if 1 //RAL
+	SDL_Rect sdlRect;
+	int w_Y_iput, h_Y_iput, ret_code;
+	proc_frame_ctx_t *proc_frame_ctx= NULL;
+	size_t fifo_elem_size= 0;
+	SDL_Renderer *sdlRenderer= NULL;
+	SDL_Texture *sdlTexture= NULL;
+
+	/* Check arguments */
+	if(rtspThreadParam== NULL) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+	if(ch< 0 || ch> VIDEO_SOURCE_CHANNEL_MAX) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+
+	/* Get input frame */
+	ret_code= fifo_get(rtspThreadParam->fifo_ctx_video_array[ch],
+			(void**)&proc_frame_ctx, &fifo_elem_size);
+	if(ret_code!= STAT_SUCCESS || proc_frame_ctx== NULL) {
+		if(ret_code!= STAT_EAGAIN)
+			rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+
+	/* Get and check input frame with and height */
+	w_Y_iput= proc_frame_ctx->width[0];
+	h_Y_iput= proc_frame_ctx->height[0];
+	if(w_Y_iput<= 0 || h_Y_iput<= 0) {
+		rtsperror("Invalid frame size at renderer\n");
+		goto end;
+	}
+
+	/* Get rendering variables */
+	sdlRenderer= rtspThreadParam->renderer[ch];
+	sdlTexture= rtspThreadParam->overlay[ch];
+	if(sdlRenderer== NULL || sdlTexture== NULL) {
+		union SDL_Event evt;
+
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__); fflush(stderr);
+		//pthread_mutex_lock(&rtspThreadParam->surfaceMutex[ch]);
+		//if(rtspThreadParam->swsctx[iid] == NULL) {
+			rtspThreadParam->width[ch] = proc_frame_ctx->width[0];
+			rtspThreadParam->height[ch] = proc_frame_ctx->height[0];
+			rtspThreadParam->format[ch] = (AVPixelFormat)AV_PIX_FMT_YUV420P;
+rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__); fflush(stderr);
+rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__); fflush(stderr);
+			//pthread_mutex_unlock(&rtspThreadParam->surfaceMutex[iid]);
+			bzero(&evt, sizeof(evt));
+			evt.user.type = SDL_USEREVENT;
+			evt.user.timestamp = time(0);
+			evt.user.code = SDL_USEREVENT_CREATE_OVERLAY;
+			evt.user.data1 = rtspThreadParam;
+			evt.user.data2 = (void*) ch;
+			SDL_PushEvent(&evt);
+			// skip the initial frame:
+			// for event handler to create/setup surfaces
+			//continue; //goto skip_frame;
+		//}
+		//pthread_mutex_unlock(&rtspThreadParam->surfaceMutex[ch]);
+			rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__); fflush(stderr);
+		goto end; // Note we are skipping this frame
+	}
+
+	/* Specify rendering area/rectangle */
+	sdlRect.x= 0;
+	sdlRect.y= 0;
+	sdlRect.w= w_Y_iput;
+	sdlRect.h= h_Y_iput;
+
+	/* Do render */
+	SDL_UpdateYUVTexture(sdlTexture, NULL,
+			proc_frame_ctx->p_data[0], proc_frame_ctx->linesize[0],
+			proc_frame_ctx->p_data[1], proc_frame_ctx->linesize[1],
+			proc_frame_ctx->p_data[2], proc_frame_ctx->linesize[2]);
+	SDL_RenderClear(sdlRenderer);
+	SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, &sdlRect);
+	SDL_RenderPresent(sdlRenderer);
+
+end:
+	if(proc_frame_ctx!= NULL)
+		proc_frame_ctx_release(&proc_frame_ctx);
+	return;
+#else
 	dpipe_buffer_t *data;
 	AVPicture *vframe;
 	SDL_Rect rect;
-#if 1	// only support SDL2
 	unsigned char *pixels;
 	int pitch;
-#endif
+
 	//
 	if((data = dpipe_load_nowait(rtspParam->pipe[ch])) == NULL) {
 		return;
 	}
 	vframe = (AVPicture*) data->pointer;
 	//
-#if 1	// only support SDL2
 	if(SDL_LockTexture(rtspParam->overlay[ch], NULL, (void**) &pixels, &pitch) == 0) {
 		bcopy(vframe->data[0], pixels, rtspParam->width[ch] * rtspParam->height[ch]);
 		bcopy(vframe->data[1], pixels+((pitch*rtspParam->height[ch]*5)>>2), rtspParam->width[ch] * rtspParam->height[ch] / 4);
@@ -402,22 +492,20 @@ render_image(struct RTSPThreadParam *rtspParam, int ch) {
 	} else {
 		rtsperror("ga-client: lock textture failed - %s\n", SDL_GetError());
 	}
-#endif
 	dpipe_put(rtspParam->pipe[ch], data);
 	rect.x = 0;
 	rect.y = 0;
 	rect.w = rtspParam->width[ch];
 	rect.h = rtspParam->height[ch];
-#if 1	// only support SDL2
+
 	SDL_RenderCopy(rtspParam->renderer[ch], rtspParam->overlay[ch], NULL, NULL);
 	SDL_RenderPresent(rtspParam->renderer[ch]);
-#endif
+
 	//
 	image_rendered = 1;
 	//
-	return;
-}
 #endif
+}
 
 void
 ProcessEvent(SDL_Event *event) {
@@ -528,57 +616,6 @@ ProcessEvent(SDL_Event *event) {
 			ctrl_client_sendmsg(&m, sizeof(sdlmsg_mouse_t));
 		}
 		break;
-#ifdef ANDROID
-#define	DEBUG_FINGER(etf)	\
-	rtsperror("XXX DEBUG: finger-event(%d) - x=%d y=%d dx=%d dy=%d p=%d\n",\
-		(etf).type, (etf).x, (etf).y, (etf).dx, (etf).dy, (etf).pressure);
-	case SDL_FINGERDOWN:
-		// window size has not been registered
-		if(nativeSizeX[0] == 0)
-			break;
-		//DEBUG_FINGER(event->tfinger);
-		if(rtspconf->ctrlenable) {
-		unsigned short mapx, mapy;
-		mapx = (unsigned short) (1.0 * (nativeSizeX[0]-1) * event->tfinger.x / 32767.0);
-		mapy = (unsigned short) (1.0 * (nativeSizeY[0]-1) * event->tfinger.y / 32767.0);
-		sdlmsg_mousemotion(&m, mapx, mapy, 0, 0, 0, 0);
-		ctrl_client_sendmsg(&m, sizeof(sdlmsg_mouse_t));
-		//
-		sdlmsg_mousekey(&m, 1, SDL_BUTTON_LEFT, mapx, mapy);
-		ctrl_client_sendmsg(&m, sizeof(sdlmsg_mouse_t));
-		}
-		break;
-	case SDL_FINGERUP:
-		// window size has not been registered
-		if(nativeSizeX[0] == 0)
-			break;
-		//DEBUG_FINGER(event->tfinger);
-		if(rtspconf->ctrlenable) {
-		unsigned short mapx, mapy;
-		mapx = (unsigned short) (1.0 * (nativeSizeX[0]-1) * event->tfinger.x / 32767.0);
-		mapy = (unsigned short) (1.0 * (nativeSizeY[0]-1) * event->tfinger.y / 32767.0);
-		sdlmsg_mousemotion(&m, mapx, mapy, 0, 0, 0, 0);
-		ctrl_client_sendmsg(&m, sizeof(sdlmsg_mouse_t));
-		//
-		sdlmsg_mousekey(&m, 0, SDL_BUTTON_LEFT, mapx, mapy);
-		ctrl_client_sendmsg(&m, sizeof(sdlmsg_mouse_t));
-		}
-		break;
-	case SDL_FINGERMOTION:
-		// window size has not been registered
-		if(nativeSizeX[0] == 0)
-			break;
-		//DEBUG_FINGER(event->tfinger);
-		if(rtspconf->ctrlenable) {
-		unsigned short mapx, mapy;
-		mapx = (unsigned short) (1.0 * (nativeSizeX[0]-1) * event->tfinger.x / 32767.0);
-		mapy = (unsigned short) (1.0 * (nativeSizeY[0]-1) * event->tfinger.y / 32767.0);
-		sdlmsg_mousemotion(&m, mapx, mapy, 0, 0, 0, 0);
-		ctrl_client_sendmsg(&m, sizeof(sdlmsg_mouse_t));
-		}
-		break;
-#undef	DEBUG_FINGER
-#endif	/* ANDROID */
 	case SDL_WINDOWEVENT:
 		if(event->window.event == SDL_WINDOWEVENT_CLOSE) {
 			rtspThreadParam.running = false;
@@ -694,17 +731,10 @@ int
 main(int argc, char *argv[]) {
 	int i;
 	SDL_Event event;
-	pthread_t rtspthread;
 	pthread_t ctrlthread;
 	pthread_t watchdog;
 	char savefile_keyts[128];
-	//
-#ifdef ANDROID
-	if(ga_init("/sdcard/ga/android.conf", NULL) < 0) {
-		rtsperror("cannot load configuration file '%s'\n", argv[1]);
-		return -1;
-	}
-#else
+
 	if(argc < 3) {
 		rtsperror("usage: %s config url\n", argv[0]);
 		return -1;
@@ -714,7 +744,7 @@ main(int argc, char *argv[]) {
 		rtsperror("cannot load configuration file '%s'\n", argv[1]);
 		return -1;
 	}
-#endif
+
 	// enable logging
 	ga_openlog();
 	//
@@ -768,10 +798,7 @@ main(int argc, char *argv[]) {
 		ga_error("SDL: prefer opengl hardware renderer.\n");
 		SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
 	}
-#if 0	// only support SDL2
-	// enable keyboard repeat?
-	SDL_EnableKeyRepeat(SDL_DEFAULT_REPEAT_DELAY, SDL_DEFAULT_REPEAT_INTERVAL);
-#endif
+
 	// launch controller?
 	do if(rtspconf->ctrlenable) {
 		if(ctrl_queue_init(32768, sizeof(sdlmsg_t)) < 0) {
@@ -788,7 +815,7 @@ main(int argc, char *argv[]) {
 	} while(0);
 	// launch watchdog
 	pthread_mutex_init(&watchdogMutex, NULL);
-	if(ga_conf_readbool("enable-watchdog", 1) == 1) {
+	/*if(ga_conf_readbool("enable-watchdog", 1) == 1) {
 		if(pthread_create(&watchdog, NULL, watchdog_thread, NULL) != 0) {
 			rtsperror("Cannot create watchdog thread.\n");
 			return -1;
@@ -796,21 +823,22 @@ main(int argc, char *argv[]) {
 		pthread_detach(watchdog);
 	} else {
 		ga_error("watchdog disabled.\n");
-	}
-	//
+	}*/ //FIXME!! //RAL
+
+	/* Prepare RTSP parameters and related variables */
 	bzero(&rtspThreadParam, sizeof(rtspThreadParam));
 	for(i = 0; i < VIDEO_SOURCE_CHANNEL_MAX; i++) {
 		pthread_mutex_init(&rtspThreadParam.surfaceMutex[i], NULL);
 	}
 	pthread_mutex_init(&rtspThreadParam.audioMutex, NULL);
 	rtspThreadParam.url = strdup(argv[2]);
-	rtspThreadParam.running = true;
-	if(pthread_create(&rtspthread, NULL, rtsp_thread, &rtspThreadParam) != 0) {
+
+	/* Launch demultiplexing thread */
+	if(rtsp_client_init(&rtspThreadParam)!= 0) {
 		rtsperror("Cannot create rtsp client thread.\n");
 		return -1;
 	}
-	pthread_detach(rtspthread);
-	//
+
 	while(rtspThreadParam.running) {
 		if(SDL_WaitEvent(&event)) {
 			ProcessEvent(&event);
@@ -820,12 +848,10 @@ main(int argc, char *argv[]) {
 	rtspThreadParam.quitLive555 = 1;
 	rtsperror("terminating ...\n");
 	//
-#ifndef ANDROID
-	pthread_cancel(rtspthread);
+	rtsp_client_deinit(&rtspThreadParam);
 	if(rtspconf->ctrlenable)
 		pthread_cancel(ctrlthread);
 	pthread_cancel(watchdog);
-#endif
 	//SDL_WaitThread(thread, &status);
 	//
 	if(savefp_keyts != NULL) {
@@ -833,9 +859,9 @@ main(int argc, char *argv[]) {
 		savefp_keyts = NULL;
 	}
 	SDL_Quit();
+
 	ga_deinit();
 	exit(0);
 	//
 	return 0;
 }
-

@@ -19,18 +19,11 @@
 #ifndef __RTSPCLIENT_H__
 #define __RTSPCLIENT_H__
 
-#ifdef ANDROID
-#include <jni.h>
-#else
 #include <SDL2/SDL.h>
-#endif
 #include <pthread.h>
 
 #include "rtspconf.h"
-#ifndef ANDROID
 #include "vsource.h"
-#endif
-#include "dpipe.h"
 
 #define	SDL_USEREVENT_CREATE_OVERLAY	0x0001
 #define	SDL_USEREVENT_OPEN_AUDIO	0x0002
@@ -42,10 +35,21 @@
 extern int image_rendered;
 
 #define	RTSP_VIDEOSTATE_NULL	0
- 
-#ifdef ANDROID
-#define	VIDEO_SOURCE_CHANNEL_MAX	2
-#endif
+
+/* FIFO size, in number of frames, for decoders -> renderer interfacing */
+#define RENDERER_FIFO_SIZE 60
+
+/* Forward declarations */
+typedef struct fifo_ctx_s fifo_ctx_t;
+typedef struct procs_ctx_s procs_ctx_t;
+
+typedef struct vdecoder_thread_s {
+	volatile int iid;
+	volatile int video_dec_proc_id;
+	volatile int video_muxer_es_id;
+	pthread_t video_dec_thread;
+	struct RTSPThreadParam *volatile rtspThreadParam;
+} vdecoder_thread_t;
 
 struct RTSPThreadParam {
 	const char *url;
@@ -58,10 +62,7 @@ struct RTSPThreadParam {
 	AVPixelFormat format[VIDEO_SOURCE_CHANNEL_MAX];
 	pthread_mutex_t surfaceMutex[VIDEO_SOURCE_CHANNEL_MAX];
 	struct SwsContext *swsctx[VIDEO_SOURCE_CHANNEL_MAX];
-	dpipe_t *pipe[VIDEO_SOURCE_CHANNEL_MAX];
-#ifdef ANDROID
-	JNIEnv *jnienv;
-#else
+	fifo_ctx_t *fifo_ctx_video_array[VIDEO_SOURCE_CHANNEL_MAX];
 #if 1	// only support SDL2
 	unsigned int windowId[VIDEO_SOURCE_CHANNEL_MAX];
 	SDL_Window *surface[VIDEO_SOURCE_CHANNEL_MAX];
@@ -71,21 +72,32 @@ struct RTSPThreadParam {
 	// audio
 	pthread_mutex_t audioMutex;
 	bool audioOpened;
-#endif
 	int videostate;
+	// **** MediaProcessors's library related ****
+	// General
+	pthread_t rtspthread;
+	int dmux_proc_id;
+	procs_ctx_t *procs_ctx;
+	// Video
+	volatile int iid_max;
+	vdecoder_thread_t vdecoder_thread_array[VIDEO_SOURCE_CHANNEL_MAX];
+	// Audio
+	volatile int audio_dec_proc_id;
+	volatile int audio_muxer_es_id;
+	pthread_t audio_dec_thread;
 };
 
 extern struct RTSPConf *rtspconf;
 
 void rtsperror(const char *fmt, ...);
-void * rtsp_thread(void *param);
+
+int rtsp_client_init(struct RTSPThreadParam *rtspThreadParam);
+void rtsp_client_deinit(struct RTSPThreadParam *rtspThreadParam);
+
+//void * rtsp_thread(void *param); //FIXME!!
 
 /* internal use only */
-int audio_buffer_fill(void *userdata, unsigned char *stream, int ssize);
-void audio_buffer_fill_sdl(void *userdata, unsigned char *stream, int ssize);
-#ifdef ANDROID
-void setRTSPThreadParam(struct RTSPThreadParam *param);
-struct RTSPThreadParam * getRTSPThreadParam();
-#endif
+int audio_buffer_fill(void *userdata, unsigned char *stream, int ssize); //FIXME!!
+void audio_buffer_fill_sdl(void *userdata, unsigned char *stream, int ssize); //FIXME!!
 
 #endif
