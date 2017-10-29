@@ -18,9 +18,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#ifndef WIN32
 #include <unistd.h>
-#endif
 
 #include "ga-common.h"
 #include "ga-conf.h"
@@ -34,18 +32,12 @@ extern "C" {
 #include <libmediaprocs/procs.h>
 }
 
-//#define	TEST_RECONFIGURE //RAL: do not reconfigure by the moment
-
-// image source pipeline:
-//	vsource -- [vsource-%d] --> filter -- [filter-%d] --> encoder
-
 // configurations:
 static char *imagepipefmt= (char*)"video-%d";
 static char *filterpipefmt= (char*)"filter-%d";
 static char *imagepipe0= (char*)"video-0";
 static char *filterpipe0= (char*)"filter-0";
 static char *filter_param[]= { imagepipefmt, filterpipefmt };
-static void *audio_encoder_param= NULL;
 
 static struct gaRect *prect = NULL;
 static struct gaRect rect;
@@ -70,7 +62,9 @@ static aencoder_arg_t aencoder_arg= {
 		.rtsp_conf= NULL,
 		.mime= NULL,
 		.procs_ctx= NULL,
-		.muxer_proc_id= -1
+		.muxer_proc_id= -1,
+		.flag_is_initialized= 0,
+		.flag_has_started= 0
 };
 
 int
@@ -107,7 +101,6 @@ init_modules() {
 	}
 	// controller server is built-in - no need to init
 	// note the order of the two modules ...
-
 	ga_init_single_module_or_quit("video-source", m_vsource, (void*) prect);
 	ga_init_single_module_or_quit("filter", m_filter, (void*) filter_param);
 
@@ -116,14 +109,13 @@ init_modules() {
 		ga_error("Could not instantiate processors module.\n");
 		exit(-1);
 	}
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
+
 	/* Initialize server module (before encoding modules) */
 	rtsp_server_arg.rtsp_conf= conf;
 	rtsp_server_arg.procs_ctx= procs_ctx;
 	rtsp_server_arg.muxer_proc_id= -1; // Initialize to invlid value
 	ga_init_single_module_or_quit("server-live555", m_server,
 			(void*)&rtsp_server_arg);
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 
 	/* Initialize video encoders */
 	vencoder_arg.rtsp_conf= conf;
@@ -134,22 +126,20 @@ printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 	vencoder_arg.muxer_proc_id= rtsp_server_arg.muxer_proc_id;
 	ga_init_single_module_or_quit("video-encoder", m_vencoder,
 			(void*)&vencoder_arg);
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
+
 	/* Initialize audio encoders */
 	if(ga_conf_readbool("enable-audio", 1) != 0) {
 		aencoder_arg.rtsp_conf= conf;
-		vencoder_arg.mime= (m_aencoder->mimetype!= NULL)?
+		aencoder_arg.mime= (m_aencoder->mimetype!= NULL)?
 				strdup(m_aencoder->mimetype): (char*)"audio/NONE";
 		aencoder_arg.procs_ctx= procs_ctx;
 		aencoder_arg.muxer_proc_id= rtsp_server_arg.muxer_proc_id;
 #ifndef __APPLE__
-		ga_init_single_module_or_quit("audio-source", m_asource,
-				(void*)&aencoder_arg);
+		ga_init_single_module_or_quit("audio-source", m_asource, NULL);
 #endif
 		ga_init_single_module_or_quit("audio-encoder", m_aencoder,
 				(void*)&aencoder_arg);
 	}
-printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout);
 	return 0;
 }
 
@@ -217,13 +207,7 @@ handle_netreport(ctrlmsg_system_t *msg) {
 int
 main(int argc, char *argv[]) {
 	int notRunning = 0;
-#ifdef WIN32
-	if(CoInitializeEx(NULL, COINIT_MULTITHREADED) < 0) {
-		fprintf(stderr, "cannot initialize COM.\n");
-		return -1;
-	}
-#endif
-	//
+
 	if(argc < 2) {
 		fprintf(stderr, "usage: %s config-file\n", argv[0]);
 		return -1;
@@ -254,12 +238,6 @@ main(int argc, char *argv[]) {
 	// enable handler to monitored network status
 	ctrlsys_set_handler(CTRL_MSGSYS_SUBTYPE_NETREPORT, handle_netreport);
 	//
-#ifdef TEST_RECONFIGURE
-	pthread_t t;
-	pthread_create(&t, NULL, test_reconfig, NULL);
-#endif
-	//rtspserver_main(NULL);
-	//liveserver_main(NULL);
 	while(1) {
 		usleep(5000000);
 	}
