@@ -32,7 +32,7 @@ ga_alsa_set_param(struct ga_alsa_param *param) {
 	unsigned int rate;
 	unsigned int buffer_time = 500000;	// in the unit of microsecond
 	unsigned int period_time = 125000;	// = buffer_time/4;
-	int monotonic = 0;
+	//int monotonic = 0;
 	snd_pcm_uframes_t start_threshold, stop_threshold;
 	int err;
 	//
@@ -73,7 +73,7 @@ ga_alsa_set_param(struct ga_alsa_param *param) {
 		return -1;
 	}
 	//
-	monotonic = snd_pcm_hw_params_is_monotonic(hwparams);
+	//monotonic = snd_pcm_hw_params_is_monotonic(hwparams);
 	if((err = snd_pcm_hw_params(param->handle, hwparams)) < 0) {
 		ga_error("ALSA: set_param - unable to install hw params:");
 		snd_pcm_hw_params_dump(hwparams, sndlog);

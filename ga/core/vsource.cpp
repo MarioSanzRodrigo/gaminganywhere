@@ -35,7 +35,6 @@
 #include "ga-common.h"
 #include "ga-conf.h"
 #include "ga-avcodec.h"
-#include "ga-crc.h"
 
 /**< Video buffer allocation alignment: should be 2^n */
 #define	VSOURCE_ALIGNMENT	16
@@ -255,38 +254,6 @@ vsource_embed_colorcode_reset() {
 }
 
 /**
- * Get CRC5-USB checksum value
- *
- * @param data [in] The data used to compute the checksum.
- * @param length [in] The lenght of the data
- * @return the CRC5-USB value
- */
-static crc5_t
-vsource_crc5_usb(unsigned char *data, int length) {
-	crc5_t crc;
-	crc = crc5_init();
-	crc = crc5_update_usb(crc, data, length);
-	crc = crc5_finalize(crc);
-	return crc;
-}
-
-/**
- * Get CRC5-CCITT checksum value
- *
- * @param data [in] The data used to compute the checksum.
- * @param length [in] The lenght of the data
- * @return the CRC5-CCITT value
- */
-static crc5_t
-vsource_crc5_ccitt(unsigned char *data, int length) {
-	crc5_t crc;
-	crc = crc5_init();
-	crc = crc5_update_ccitt(crc, data, length);
-	crc = crc5_finalize(crc);
-	return crc;
-}
-
-/**
  * Embed color codes in a YUV image. This is an internal function.
  *
  * @param frame [in] Pointer to the video frame.
@@ -314,16 +281,10 @@ vsource_embed_yuv_code(vsource_frame_t *frame, unsigned int value) {
 	}
 	//// make the color code line
 	// compute crc
-#if 0
-	unsigned int crcin = htonl(value);
-	suffix[0] = 0x07 & vsource_crc5_ccitt((unsigned char*) &crcin, sizeof(crcin));
-	suffix[1] = 0x07 & vsource_crc5_usb((unsigned char*) &crcin, sizeof(crcin));
-#else
 	if(value != 0) {
 		suffix[0] = (43 * (((value * 32)/43) + 1) - 32 * value) & 0x07;
 		suffix[1] = (37 * (((value * 32)/37) + 1) - 32 * value) & 0x07;
 	}
-#endif
 	// value part
 	while(mask != 0) {
 		digit = ((value & mask) >> shift);
@@ -339,7 +300,7 @@ vsource_embed_yuv_code(vsource_frame_t *frame, unsigned int value) {
 		shift -= 3;
 	}
 	// suffix part: crc + id
-	for(j = 0; j < sizeof(suffix); j++) {
+	for(j = 0; j < (int)sizeof(suffix); j++) {
 		for(i = 0; i < vsource_colorcode_width; i++) {
 			*srcY++ = yuv_colorY[suffix[j]];
 		}
@@ -399,17 +360,10 @@ vsource_embed_rgba_code(vsource_frame_t *frame, unsigned int value, unsigned cha
 			value, ccodets.tv_sec, ccodets.tv_usec);
 	}
 	//// make the color code line
-	// compute crc
-#if 0
-	unsigned int crcin = htonl(value);
-	suffix[0] = 0x07 & vsource_crc5_ccitt((unsigned char*) &crcin, sizeof(crcin));
-	suffix[1] = 0x07 & vsource_crc5_usb((unsigned char*) &crcin, sizeof(crcin));
-#else
 	if(value != 0) {
 		suffix[0] = (43 * (((value * 32)/43) + 1) - 32 * value) & 0x07;
 		suffix[1] = (37 * (((value * 32)/37) + 1) - 32 * value) & 0x07;
 	}
-#endif
 	// value part
 	while(mask != 0) {
 		digit = ((value & mask) >> shift);
@@ -423,7 +377,7 @@ vsource_embed_rgba_code(vsource_frame_t *frame, unsigned int value, unsigned cha
 		shift -= 3;
 	}
 	// suffix part: crc + id
-	for(j = 0; j < sizeof(suffix); j++) {
+	for(j = 0; j < (int)sizeof(suffix); j++) {
 		for(i = 0; i < vsource_colorcode_width; i++) {
 			*dst++ = color[suffix[j]][0];
 			*dst++ = color[suffix[j]][1];

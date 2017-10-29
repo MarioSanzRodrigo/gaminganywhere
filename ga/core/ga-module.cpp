@@ -113,8 +113,10 @@ ga_unload_module(ga_module_t *m) {
  */
 int
 ga_init_single_module(const char *name, ga_module_t *m, void *arg) {
+printf("===================== %s %d m: %p\n", __FILE__, __LINE__, m); fflush(stdout); //FIXME!!
 	if(m->init == NULL)
 		return 0;
+printf("===================== %s %d\n", __FILE__, __LINE__); fflush(stdout); //FIXME!!
 	if(m->init(arg) < 0) {
 		ga_error("%s init failed.\n", name);
 		return -1;

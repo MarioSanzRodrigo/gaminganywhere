@@ -141,7 +141,7 @@ ctrl_queue_write_msg(void *msg, int msgsize) {
 	int nextpos;
 	struct queuemsg *qmsg;
 	//
-	if((msgsize + sizeof(struct queuemsg)) > qunit) {
+	if((msgsize + (int)sizeof(struct queuemsg)) > qunit) {
 		ga_error("controller queue: msg size exceeded (%d > %d).\n",
 			msgsize + sizeof(struct queuemsg), qunit);
 		return 0;

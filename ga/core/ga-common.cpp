@@ -51,6 +51,7 @@ extern "C" {
 #include <libmediaprocscodecs/ffmpeg_x264.h>
 #include <libmediaprocscodecs/ffmpeg_m2v.h>
 #include <libmediaprocscodecs/ffmpeg_lhe.h>
+#include <libmediaprocscodecs/ffmpeg_mp3.h>
 #include <libmediaprocsmuxers/live555_rtsp.h>
 }
 
@@ -364,6 +365,11 @@ ga_init(const char *config, const char *url) {
 		ga_error("GA: Could not register processor type.\n");
 		return -1;
 	}
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_mp3_enc)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
 	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_live555_rtsp_mux)!=
 			STAT_SUCCESS) {
 		ga_error("GA: Could not register processor type.\n");
@@ -380,6 +386,11 @@ ga_init(const char *config, const char *url) {
 		return -1;
 	}
 	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_mlhe_dec)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_ffmpeg_mp3_dec)!=
 			STAT_SUCCESS) {
 		ga_error("GA: Could not register processor type.\n");
 		return -1;

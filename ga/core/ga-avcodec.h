@@ -39,13 +39,7 @@ extern "C" {
 #include <string>
 #include <vector>
 
-EXPORT AVFormatContext* ga_format_init(const char *filename);
-EXPORT AVFormatContext* ga_rtp_init(const char *url);
-EXPORT AVStream* ga_avformat_new_stream(AVFormatContext *ctx, int id, AVCodec *codec);
 EXPORT AVCodec* ga_avcodec_find_encoder(const char **names, enum AVCodecID cid = AV_CODEC_ID_NONE);
 EXPORT AVCodec* ga_avcodec_find_decoder(const char **names, enum AVCodecID cid = AV_CODEC_ID_NONE);
-EXPORT AVCodecContext*	ga_avcodec_vencoder_init(AVCodecContext *ctx, AVCodec *codec, int width, int height, int fps, std::vector<std::string> *vso = NULL);
-EXPORT AVCodecContext*	ga_avcodec_aencoder_init(AVCodecContext *ctx, AVCodec *codec, int bitrate, int samplerate, int channels, AVSampleFormat format, uint64_t chlayout);
-EXPORT void ga_avcodec_close(AVCodecContext *ctx);
 
 #endif

@@ -83,6 +83,8 @@ typedef struct aencoder_arg_s {
 	char *mime;
 	procs_ctx_t *procs_ctx;
 	volatile int muxer_proc_id;
+	volatile int flag_is_initialized;
+	volatile int flag_has_started;
 } aencoder_arg_t;
 
 typedef void (*qcallback_t)(int);

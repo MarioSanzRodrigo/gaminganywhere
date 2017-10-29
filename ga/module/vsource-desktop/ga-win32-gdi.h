@@ -25,6 +25,5 @@
 int ga_win32_GDI_init(struct gaImage *image);
 void ga_win32_GDI_deinit();
 int ga_win32_GDI_capture(char *buf, int buflen, struct gaRect *grect);
-//int ga_win32_GDI_capture_YUV(struct SwsContext *swsctx, char *buf, int buflen, int *lsize);
 
 #endif
