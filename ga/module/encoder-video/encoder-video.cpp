@@ -132,8 +132,8 @@ static void* es_mux_thr(void *arg)
 		 */
 		if(proc_frame_ctx== NULL)
 			continue;
-		ga_error("Got frame!! (%dx%d)\n", proc_frame_ctx->width[0],
-				proc_frame_ctx->height[0]); //comment-me
+		//ga_error("Got frame!! (%dx%d)\n", proc_frame_ctx->width[0],
+		//		proc_frame_ctx->height[0]); //comment-me
 		proc_frame_ctx->es_id= vencoder_thread->muxer_es_id;
 		ret_code= procs_send_frame(procs_ctx, vencoder_arg->muxer_proc_id,
 				proc_frame_ctx);
@@ -186,7 +186,7 @@ static int vencoder_init(void *arg)
 		goto end;
 	}
 
-	/* Check encoder name exists (we will only use the first one) */
+	/* Check if encoder name exists (we will only use the first one) */
 	if(rtspconf->video_encoder_name[0]== NULL) {
 		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
 		goto end;
@@ -265,7 +265,7 @@ end:
 	if(rest_str!= NULL)
 		free(rest_str);
 	if(end_code!= 0) // error occurred
-		vencoder_deinit(NULL);
+		vencoder_deinit(vencoder_arg);
 	return end_code;
 }
 
@@ -277,7 +277,7 @@ static int vencoder_deinit(void *arg)
 
 	/* Check arguments */
 	if(vencoder_arg== NULL) {
-		ga_error("Bad arguments at 'vencoder_deinit()'\n");
+		ga_error("Bad arguments at '%s'\n", __FUNCTION__);
 		return -1;
 	}
 
@@ -508,7 +508,6 @@ static int vencoder_start(void *arg)
 static int vencoder_stop(void *arg)
 {
 	int iid;
-	void *ignored;
 	vencoder_arg_t *vencoder_arg= (vencoder_arg_t*)arg;
 
 	/* Check arguments */

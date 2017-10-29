@@ -26,7 +26,7 @@ ga-client: ga-client.o rtspclient.o ctrl-sdl.o
 install: $(TARGET)
 	mkdir -p ../../bin
 	cp -f $(TARGET) ../../bin
-	cp -f *.ttf ../../bin
+	#cp -f *.ttf ../../bin
 
 clean:
 	rm -f $(TARGET) *.o *~

@@ -28,11 +28,6 @@
 #define	SDL_USEREVENT_CREATE_OVERLAY	0x0001
 #define	SDL_USEREVENT_OPEN_AUDIO	0x0002
 #define	SDL_USEREVENT_RENDER_IMAGE	0x0004
-#define	SDL_USEREVENT_RENDER_TEXT	0x0008
-
-#define SDL_AUDIO_BUFFER_SIZE		2048
-
-extern int image_rendered;
 
 #define	RTSP_VIDEOSTATE_NULL	0
 
@@ -61,7 +56,6 @@ struct RTSPThreadParam {
 	int height[VIDEO_SOURCE_CHANNEL_MAX];
 	AVPixelFormat format[VIDEO_SOURCE_CHANNEL_MAX];
 	pthread_mutex_t surfaceMutex[VIDEO_SOURCE_CHANNEL_MAX];
-	struct SwsContext *swsctx[VIDEO_SOURCE_CHANNEL_MAX];
 	fifo_ctx_t *fifo_ctx_video_array[VIDEO_SOURCE_CHANNEL_MAX];
 #if 1	// only support SDL2
 	unsigned int windowId[VIDEO_SOURCE_CHANNEL_MAX];
@@ -69,10 +63,6 @@ struct RTSPThreadParam {
 	SDL_Renderer *renderer[VIDEO_SOURCE_CHANNEL_MAX];
 	SDL_Texture *overlay[VIDEO_SOURCE_CHANNEL_MAX];
 #endif
-	// audio
-	pthread_mutex_t audioMutex;
-	bool audioOpened;
-	int videostate;
 	// **** MediaProcessors's library related ****
 	// General
 	pthread_t rtspthread;
@@ -93,11 +83,5 @@ void rtsperror(const char *fmt, ...);
 
 int rtsp_client_init(struct RTSPThreadParam *rtspThreadParam);
 void rtsp_client_deinit(struct RTSPThreadParam *rtspThreadParam);
-
-//void * rtsp_thread(void *param); //FIXME!!
-
-/* internal use only */
-int audio_buffer_fill(void *userdata, unsigned char *stream, int ssize); //FIXME!!
-void audio_buffer_fill_sdl(void *userdata, unsigned char *stream, int ssize); //FIXME!!
 
 #endif

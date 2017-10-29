@@ -17,368 +17,390 @@
  */
 
 #include <stdio.h>
-#ifndef WIN32
 #include <unistd.h>
-#endif
 
-#include "vsource.h"	// for getting the current audio-id
 #include "asource.h"
 #include "rtspconf.h"
 #include "encoder-common.h"
-
 #include "ga-common.h"
 #include "ga-conf.h"
-#include "ga-avcodec.h"
 #include "ga-module.h"
 
-//MODULE EXPORT void * aencoder_threadproc(void *arg);
-
-static int aencoder_initialized = 0;
-static int aencoder_started = 0;
-static pthread_t aencoder_tid;
-
-// internal configuration
-static int rtp_id = -1;
-// for audio encoding
-static AVCodecContext *encoder = NULL;
-static AVCodecContext *encoder_sdp = NULL;
-static int dstlines[SWR_CH_MAX];	// max SWR_CH_MAX (32) channels
-static int source_size = -1;
-static int encoder_size = -1;
-// for audio conversion
-static SwrContext *swrctx = NULL;
-static const unsigned char *srcplanes[SWR_CH_MAX];
-static unsigned char *dstplanes[SWR_CH_MAX];
-static unsigned char *convbuf = NULL;
-
-static int
-aencoder_deinit(void *arg) {
-	if(aencoder_initialized == 0)
-		return 0;
-	if(convbuf)	free(convbuf);
-	if(swrctx)	swr_free(&swrctx);
-	if(encoder)	ga_avcodec_close(encoder);
-	if(encoder_sdp)	ga_avcodec_close(encoder_sdp);
-	//
-	swrctx = NULL;
-	convbuf = NULL;
-	encoder = NULL;
-	encoder_sdp = NULL;
-	source_size = encoder_size = -1;
-	//
-	aencoder_initialized = 0;
-	ga_error("audio encoder: deinitialized.\n");
-	//
-	return 0;
+/* MediaProcessors's library related */
+extern "C" {
+#include <libcjson/cJSON.h>
+#include <libmediaprocsutils/stat_codes.h>
+#include <libmediaprocsutils/schedule.h>
+#include <libmediaprocs/proc_if.h>
+#include <libmediaprocs/procs.h>
 }
 
-static int
-aencoder_init(void *arg) {
-	struct RTSPConf *rtspconf = rtspconf_global();
-	rtp_id = video_source_channels();
-	if(aencoder_initialized != 0)
-		return 0;
-	if(rtspconf == NULL) {
-		ga_error("audio encoder: no valid global configuration available.\n");
+typedef struct aencoder_thread_s {
+	aencoder_arg_t *aencoder_arg;
+	int enc_proc_id;
+	int muxer_es_id;
+	pthread_t enc_thread;
+	pthread_t enc2mux_thread;
+} aencoder_thread_t;
+
+static struct aencoder_thread_s aencoder_thread;
+
+/* Prototypes */
+static int aencoder_deinit(void *arg);
+
+static void* es_mux_thr(void *arg)
+{
+	int iid, ret_code, *ref_end_code= NULL;
+	aencoder_thread_t *aencoder_thread= (aencoder_thread_t*)arg;
+	aencoder_arg_t *aencoder_arg= NULL;
+	struct RTSPConf *rtspconf= NULL;
+	procs_ctx_t *procs_ctx= NULL;
+	proc_frame_ctx_t *proc_frame_ctx= NULL;
+
+	/* Allocate return context; initialize to a default 'ERROR' value */
+	if((ref_end_code= (int*)malloc(sizeof(int)))== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return NULL;
+	}
+	*ref_end_code= -1; // "error status" by default
+
+	/* Check arguments */
+	if(aencoder_thread== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+
+	/* Get variables */
+	if((aencoder_arg= aencoder_thread->aencoder_arg)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((rtspconf= aencoder_arg->rtsp_conf)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((procs_ctx= aencoder_arg->procs_ctx)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+
+	/* Get frame from encoder and send to multiplexer */
+	while(aencoder_arg->flag_has_started== 1) {
+
+		/* Receive encoded frame */
+		if(proc_frame_ctx!= NULL)
+			proc_frame_ctx_release(&proc_frame_ctx);
+		ret_code= procs_recv_frame(procs_ctx, aencoder_thread->enc_proc_id,
+				&proc_frame_ctx);
+		if(ret_code!= STAT_SUCCESS) {
+			if(ret_code== STAT_EAGAIN)
+				schedule(); // Avoid closed loops
+			else
+				fprintf(stderr, "Error while encoding frame'\n");
+			continue;
+		}
+
+		/* Send encoded frame to multiplexer.
+		 * IMPORTANT: Set correctly the elementary stream Id. to be able to
+		 * correctly multiplex each frame.
+		 */
+		if(proc_frame_ctx== NULL)
+			continue;
+		//ga_error("Got audio frame!! (%dx%d)\n", proc_frame_ctx->width[0],
+		//		proc_frame_ctx->height[0]); //comment-me
+
+		proc_frame_ctx->es_id= aencoder_thread->muxer_es_id;
+		ret_code= procs_send_frame(procs_ctx, aencoder_arg->muxer_proc_id,
+				proc_frame_ctx);
+		if(ret_code!= STAT_SUCCESS) {
+			if(ret_code== STAT_EAGAIN)
+				schedule(); // Avoid closed loops
+			else
+				fprintf(stderr, "Error while multiplexing frame'\n");
+			continue;
+		}
+	}
+
+	*ref_end_code= 0; // "success status"
+end:
+	if(proc_frame_ctx!= NULL)
+		proc_frame_ctx_release(&proc_frame_ctx);
+	return (void*)ref_end_code;
+}
+
+static int aencoder_init(void *arg)
+{
+	char *mime;
+	int ret_code, end_code= -1;
+	aencoder_arg_t *aencoder_arg= (aencoder_arg_t*)arg;
+	struct RTSPConf *rtspconf= NULL;
+	procs_ctx_t *procs_ctx= NULL;
+	char *rest_str= NULL;
+	cJSON *cjson_rest= NULL, *cjson_aux= NULL;
+	char proc_settings[128]= {0};
+
+	/* Check arguments */
+	if(aencoder_arg== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
 		return -1;
 	}
-	// no duplicated initialization
-	if(encoder != NULL) {
-		ga_error("audio encoder: has been initialized.\n");
-		return 0;
+
+	if((rtspconf= aencoder_arg->rtsp_conf)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
 	}
-	// alloc encoder
-	encoder = ga_avcodec_aencoder_init(
-			NULL,
-			rtspconf->audio_encoder_codec,
-			rtspconf->audio_bitrate,
-			rtspconf->audio_samplerate,
-			rtspconf->audio_channels,
-			rtspconf->audio_codec_format,
-			rtspconf->audio_codec_channel_layout);
-	if(encoder == NULL) {
-		ga_error("audio encoder: cannot initialized the encoder.\n");
-		goto init_failed;
+	if((procs_ctx= aencoder_arg->procs_ctx)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
 	}
-	// encoder for SDP generation
-	switch(rtspconf->audio_encoder_codec->id) {
-	case AV_CODEC_ID_AAC:
-		// need ctx with CODEC_FLAG_GLOBAL_HEADER flag
-		encoder_sdp = avcodec_alloc_context3(rtspconf->audio_encoder_codec);
-		if(encoder_sdp == NULL)
-			goto init_failed;
-		encoder_sdp->flags |= CODEC_FLAG_GLOBAL_HEADER;
-		if(encoder_sdp == NULL)
-			goto init_failed;
-		encoder_sdp = ga_avcodec_aencoder_init(encoder_sdp,
-				rtspconf->audio_encoder_codec,
-				rtspconf->audio_bitrate,
-				rtspconf->audio_samplerate,
-				rtspconf->audio_channels,
-				rtspconf->audio_codec_format,
-				rtspconf->audio_codec_channel_layout);
-		ga_error("audio encoder: meta-encoder #%d created.\n");
-		break;
-	default:
-		// do nothing
-		break;
+	if(aencoder_arg->flag_is_initialized!= 0) {
+		end_code= 0;
+		goto end;
 	}
-	// estimate sizes
-	source_size = av_samples_get_buffer_size(NULL,
-			rtspconf->audio_channels,
-			encoder->frame_size,
-			rtspconf->audio_device_format, 1/*no-alignment*/);
-	encoder_size = av_samples_get_buffer_size(dstlines,
-			encoder->channels,
-			encoder->frame_size,
-			encoder->sample_fmt, 1/*no-alignment*/);
-#if 1
-	do {
-		int i = 0;
-		while(dstlines[i] > 0) {
-			ga_error("audio encoder: encoder_size=%d, frame_size=%d, dstlines[%d] = %d\n",
-				encoder_size, encoder->frame_size, i, dstlines[i]);
-			i++;
-		}
-	} while(0);
-#endif
-	// need live format conversion?
-	if(rtspconf->audio_device_format != encoder->sample_fmt) {
-		if((swrctx = swr_alloc_set_opts(NULL, 
-				encoder->channel_layout,
-				encoder->sample_fmt,
-				encoder->sample_rate,
-				rtspconf->audio_device_channel_layout,
-				rtspconf->audio_device_format,
-				rtspconf->audio_samplerate,
-				0, NULL)) == NULL) {
-			ga_error("audio encoder: cannot allocate swrctx.\n");
-			goto init_failed;
-		}
-		if(swr_init(swrctx) < 0) {
-			ga_error("audio encoder: cannot initialize swrctx.\n");
-			goto init_failed;
-		}
-		//
-		if((convbuf = (unsigned char*) malloc(encoder_size)) == NULL) {
-			ga_error("audio encoder: cannot allocate conversion buffer.\n");
-			goto init_failed;
-		}
-		bzero(convbuf, encoder_size);
-		//
-		dstplanes[0] = convbuf;
-		if(av_sample_fmt_is_planar(encoder->sample_fmt) != 0) {
-			// planar
-			int i;
-			for(i = 1; i < encoder->channels; i++) {
-				dstplanes[i] = dstplanes[i-1] + dstlines[i-1];
-			}
-			dstplanes[i] = NULL;
-		} else {
-			dstplanes[1] = NULL;
-		}
-		ga_error("audio encoder: on-the-fly audio format conversion enabled.\n");
-		ga_error("audio encoder: convert from %dch(%llx)@%dHz (%s) to %dch(%lld)@%dHz (%s).\n",
-			rtspconf->audio_channels, rtspconf->audio_device_channel_layout, rtspconf->audio_samplerate,
-			av_get_sample_fmt_name(rtspconf->audio_device_format),
-			encoder->channels, encoder->channel_layout, encoder->sample_rate,
-			av_get_sample_fmt_name(encoder->sample_fmt));
+
+	/* Check if encoder name exists */
+	if(rtspconf->audio_encoder_name[0]== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
 	}
-	//
-	aencoder_initialized = 1;
+
+	/* Register encoder in PROCS module */
+	aencoder_thread.aencoder_arg= aencoder_arg;
+	aencoder_thread.enc_proc_id= -1;
+	aencoder_thread.muxer_es_id= -1;
+	snprintf(proc_settings, sizeof(proc_settings),
+			"bit_rate_output=%d&sample_rate_output=%d",
+			rtspconf->audio_bitrate, rtspconf->audio_samplerate);
+	//ga_error("proc_settings: '%s'\n", proc_settings); //comment-me
+	ret_code= procs_opt(procs_ctx, "PROCS_POST",
+			rtspconf->audio_encoder_name[0], proc_settings, &rest_str);
+	if(ret_code!= STAT_SUCCESS || rest_str== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((cjson_rest= cJSON_Parse(rest_str))== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((cjson_aux= cJSON_GetObjectItem(cjson_rest, "proc_id"))== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((aencoder_thread.enc_proc_id= cjson_aux->valuedouble)< 0) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	free(rest_str); rest_str= NULL;
+	cJSON_Delete(cjson_rest); cjson_rest= NULL;
+
+	/* Register an elementary stream for the multiplexer */
+	mime= (aencoder_arg->mime!= NULL)? aencoder_arg->mime:
+			(char*)"audio/NONE";
+	snprintf(proc_settings, sizeof(proc_settings), "sdp_mimetype=%s", mime);
+	ret_code= procs_opt(procs_ctx, "PROCS_ID_ES_MUX_REGISTER",
+			aencoder_arg->muxer_proc_id, proc_settings, &rest_str);
+	if(ret_code!= STAT_SUCCESS || rest_str== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((cjson_rest= cJSON_Parse(rest_str))== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((cjson_aux= cJSON_GetObjectItem(cjson_rest,
+			"elementary_stream_id"))== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((aencoder_thread.muxer_es_id= cjson_aux->valuedouble)< 0) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	free(rest_str); rest_str= NULL;
+	cJSON_Delete(cjson_rest); cjson_rest= NULL;
+
+	aencoder_arg->flag_is_initialized= 1;
 	ga_error("audio encoder: initialized.\n");
-	//
-	return 0;
-init_failed:
-	aencoder_deinit(NULL);
-	return -1;
+	end_code= 0;
+end:
+	if(cjson_rest!= NULL)
+		cJSON_Delete(cjson_rest);
+	if(rest_str!= NULL)
+		free(rest_str);
+	if(end_code!= 0) // error occurred
+		aencoder_deinit(aencoder_arg);
+	return end_code;
 }
 
-static void *
-aencoder_threadproc(void *arg) {
-	struct RTSPConf *rtspconf = rtspconf_global();
+static int aencoder_deinit(void *arg)
+{
+	int ret_code;
+	aencoder_arg_t *aencoder_arg= (aencoder_arg_t*)arg;
+
+	/* Check arguments */
+	if(aencoder_arg== NULL) {
+		ga_error("Bad arguments at '%s'\n", __FUNCTION__);
+		return -1;
+	}
+
+	if(procs_opt(aencoder_arg->procs_ctx, "PROCS_ID_DELETE",
+			aencoder_thread.enc_proc_id)!= STAT_SUCCESS) {
+		ga_error("audio encoder: deinitialization failed: could not "
+				"delete encoder instance.\n");
+	} else {
+		aencoder_thread.enc_proc_id= -1;
+	}
+
+	aencoder_arg->flag_is_initialized= 0;
+	ga_error("audio encoder: deinitialized.\n");
+	return 0;
+}
+
+static void *aencoder_threadproc(void *arg)
+{
+	int64_t frame_period_usec, frame_period_90KHz;
+	int ret_code, frame_size_samples= 0, frame_size_bytes= 0,
+			frames_size_bytes= 0;
+	aencoder_thread_t *aencoder_thread= (aencoder_thread_t*)arg;
+	aencoder_arg_t *aencoder_arg= NULL; // Alias
+	struct RTSPConf *rtspconf= NULL; // Alias
+	procs_ctx_t *procs_ctx= NULL; // Alias
+	char *rest_str= NULL;
+	cJSON *cjson_rest= NULL, *cjson_aux= NULL;
+	proc_frame_ctx_s proc_frame_ctx= {0};
 	int r, frameunit;
-	// input frame
-	AVFrame frame0, *snd_in = &frame0;
-	int got_packet;
-	// buffer used to store encoder outputs
-	unsigned char *buf = NULL;
-	int bufsize;
 	// buffer used to store captured data
 	unsigned char *samples = NULL;
-	int nsamples, samplebytes, maxsamples, samplesize;
+	int nsamples= 0, samplebytes= 0, buffer_purged= 0;
 	int offset;
-	// for a/v sync
-#ifdef WIN32
-	LARGE_INTEGER baseT, currT, freq;
-#else
-	struct timeval baseT, currT;
-#endif
-	struct timeval tv;
-	long long pts = -1LL, newpts = 0LL, ptsOffset = 0LL, ptsSync = 0LL;
-	//
 	audio_buffer_t *ab = NULL;
-	int audio_written = 0;
-	int buffer_purged = 0;
-	//
-	nsamples = 0;
-	samplebytes = 0;
-	maxsamples = encoder->frame_size;
-	samplesize = encoder->frame_size * audio_source_channels() * audio_source_bitspersample() / 8;
-	//
-	encoder_pts_clear(rtp_id);
-	//
+
+	/* Check arguments */
+	if(aencoder_thread== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return NULL;
+	}
+
+	/* Get variables */
+	if((aencoder_arg= aencoder_thread->aencoder_arg)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((rtspconf= aencoder_arg->rtsp_conf)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((procs_ctx= aencoder_arg->procs_ctx)== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+
+	/* Get frame size requested by audio encoder. We need this data to
+	 * know how many bytes to send to the encoder.
+	 */
+	ret_code= procs_opt(procs_ctx, "PROCS_ID_GET",
+			aencoder_thread->enc_proc_id, &rest_str);
+	if(ret_code!= STAT_SUCCESS || rest_str== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	//printf("PROCS_ID_GET: '%s'\n", rest_str); fflush(stdout); //comment-me
+	if((cjson_rest= cJSON_Parse(rest_str))== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((cjson_aux= cJSON_GetObjectItem(cjson_rest,
+			"expected_frame_size_iput"))== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((frame_size_bytes= cjson_aux->valuedouble* sizeof(uint16_t))< 0) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	free(rest_str); rest_str= NULL;
+	cJSON_Delete(cjson_rest); cjson_rest= NULL;
+
+	frame_size_samples= frame_size_bytes>> 1; // 16-bit samples
+	frames_size_bytes= frame_size_bytes * audio_source_channels();
+
+	/* Capture buffer related */
 	if((ab = audio_source_buffer_init()) == NULL) {
 		ga_error("audio encoder: cannot initialize audio source buffer.\n");
 		return NULL;
 	}
 	audio_source_client_register(ga_gettid(), ab);
-	//
-	if((samples = (unsigned char*) malloc(samplesize)) == NULL) {
-		ga_error("audio encoder: cannot allocate sample buffer (%d bytes), terminated.\n", samplesize);
-		goto audio_quit;
+
+	if((samples = (unsigned char*) malloc(frames_size_bytes)) == NULL) {
+		ga_error("audio encoder: cannot allocate sample buffer (%d bytes), "
+				"terminated.\n", frames_size_bytes);
+		goto end;
 	}
-	//
-	bufsize = samplesize;
-	if((buf = (unsigned char*) malloc(bufsize)) == NULL) {
-		ga_error("audio encoder: cannot allocate encoding buffer (%d bytes), terminated.\n", bufsize);
-		goto audio_quit;
-	}
-	//
+
 	frameunit = audio_source_channels() * audio_source_bitspersample() / 8;
-	//
-	bzero(snd_in, sizeof(*snd_in));
-	av_frame_unref(snd_in);
+
 	// start encoding
-	ga_error("audio encoding started: tid=%ld channels=%d, frames=%d (%d/%d bytes), chunk_size=%ld (%d bytes), delay=%d\n",
-		ga_gettid(),
-		encoder->channels, encoder->frame_size,
-		encoder->frame_size * encoder->channels * audio_source_bitspersample() / 8,
-		encoder_size,
-		audio_source_chunksize(),	//audio->chunk_size
-		audio_source_chunkbytes(),	//audio->chunk_bytes
-		encoder->delay);
-	//
-#ifdef WIN32
-	QueryPerformanceFrequency(&freq);
-#endif
-	//
-	while(aencoder_started != 0 && encoder_running() > 0) {
-		//
+	ga_error("audio encoding started\n");
+
+    frame_period_usec= (1000000* frame_size_samples)/
+    		rtspconf->audio_samplerate; //usecs
+    frame_period_90KHz= (frame_period_usec/1000/*[msec]*/)*
+    		90/*[ticks/msec]*/; //ticks
+
+	while(aencoder_arg->flag_has_started!= 0) {
+		struct timespec time_curr;
+		int64_t pts;
+
 		if(buffer_purged == 0) {
 			audio_source_buffer_purge(ab);
 			buffer_purged = 1;
 		}
-		// read audio frames
-		r = audio_source_buffer_read(ab, samples + samplebytes, maxsamples - nsamples);
-		gettimeofday(&tv, NULL);
+		// read audio frames //FIXME!! Bad implemented GA!
+		r = audio_source_buffer_read(ab, samples + samplebytes,
+				frame_size_samples- nsamples);
 		if(r <= 0) {
 			usleep(1000);
 			continue;
 		}
-#ifdef WIN32
-		QueryPerformanceCounter(&currT);
-#else
-		gettimeofday(&currT, NULL);
-#endif
-		if(pts == -1LL) {
-			baseT = currT;
-			ptsSync = encoder_pts_sync(rtspconf->audio_samplerate);
-			pts = newpts = ptsSync;
-			ptsOffset = r;
-		} else {
-#ifdef WIN32
-			newpts = ptsSync + pcdiff_us(currT, baseT, freq) * rtspconf->audio_samplerate / 1000000LL;
-#else
-			newpts = ptsSync + tvdiff_us(&currT, &baseT) * rtspconf->audio_samplerate / 1000000LL;
-#endif
-			newpts -= r;
-			newpts -= ptsOffset;
-		}
-		//
-		if(newpts > pts) {
-			pts = newpts;
-		}
+
 		// encode
 		nsamples += r;
 		samplebytes += r*frameunit;
 		offset = 0;
-		while(nsamples >= encoder->frame_size) {
-			AVPacket pkt1, *pkt = &pkt1;
-			unsigned char *srcbuf;
-			int srcsize;
-			//
-			av_init_packet(pkt);
-			snd_in->nb_samples = encoder->frame_size;
-			snd_in->format = encoder->sample_fmt;
-			snd_in->channel_layout = encoder->channel_layout;
-			//
-			srcbuf = samples+offset;
-			srcsize = source_size;
-			//
-			if(swrctx != NULL) {
-				// format conversion: using libswresample/swr_convert
-				// assume source is always in packed (interleaved) format
-				srcplanes[0] = srcbuf;
-				srcplanes[1] = NULL;
-				swr_convert(swrctx, dstplanes, encoder->frame_size,
-						    srcplanes, encoder->frame_size);
-				srcbuf = convbuf;
-				srcsize = encoder_size;
+
+		/* Get time-stamp base for this chunk */
+		clock_gettime(CLOCK_MONOTONIC, &time_curr);
+		pts= (int64_t)((int64_t)time_curr.tv_sec*1000000000+
+				(int64_t)time_curr.tv_nsec); //[nsecs]
+		pts= (pts*90)/1000000; //[nsec*clk_90KHz/nsec= clk_90KHz]
+
+		while(nsamples >= frame_size_samples) {
+			unsigned char *srcbuf= samples+ offset;
+
+			/* Prepare audio frame to be encoded */
+			proc_frame_ctx.data= srcbuf;
+			proc_frame_ctx.p_data[0]= srcbuf;
+			proc_frame_ctx.width[0]= proc_frame_ctx.linesize[0]=
+					frame_size_bytes<< 1;
+			proc_frame_ctx.height[0]= 1;
+			proc_frame_ctx.proc_sample_fmt= PROC_IF_FMT_S16;
+			proc_frame_ctx.pts= pts;
+			//printf("pts: %"PRId64"\n", pts); fflush(stdout); //comment-me
+
+			/* Send audio frame to encoder */
+			ret_code= procs_send_frame(procs_ctx, aencoder_thread->enc_proc_id,
+					&proc_frame_ctx);
+			if(ret_code!= STAT_SUCCESS && ret_code!= STAT_EAGAIN) {
+				ga_error("'%s' failed. Line %d code: %d\n", __FUNCTION__,
+						__LINE__, ret_code);
 			}
-			//
-			if(avcodec_fill_audio_frame(snd_in, encoder->channels,
-					encoder->sample_fmt, srcbuf/*samples+offset*/,
-					srcsize/*encoder_size*/, 1/*no-alignment*/) < 0) {
-				// error
-				ga_error("DEBUG: avcodec_fill_audio_frame failed.\n");
-			}
-			snd_in->pts = pts;
-			encoder_pts_put(rtp_id, pts, &tv);
-			//
-			pkt->data = buf;
-			pkt->size = bufsize;
-			got_packet = 0;
-			if(avcodec_encode_audio2(encoder, pkt, snd_in, &got_packet) != 0) {
-				ga_error("audio encoder: encoding failed, terminated\n");
-				goto audio_quit;
-			}
-			if(got_packet == 0/* || encoder->coded_frame == NULL*/)
-				goto drop_audio_frame;
-			// pts rescale is done in encoder_send_packet
-			// XXX: some encoder does not produce pts ...
-			if(pkt->pts == (int64_t) AV_NOPTS_VALUE) {
-				pkt->pts = pts;
-			}
-			//
-#if 0			// XXX: not working since ffmpeg 2.0?
-			if(encoder->coded_frame->key_frame)
-				pkt->flags |= AV_PKT_FLAG_KEY;
-#endif
-			if(snd_in->extended_data && snd_in->extended_data != snd_in->data)
-				av_freep(snd_in->extended_data);
-			pkt->stream_index = 0;
-			//
-			if(encoder_ptv_get(rtp_id, pkt->pts, &tv, rtspconf->audio_samplerate) == NULL) {
-				gettimeofday(&tv, NULL);
-			}
-			// send the packet
-			if(encoder_send_packet("audio-encoder",
-				rtp_id/*rtspconf->audio_id*/, pkt,
-				/*encoder->coded_frame->*/pkt->pts == AV_NOPTS_VALUE ? pts : /*encoder->coded_frame->*/pkt->pts,
-				&tv) < 0) {
-				goto audio_quit;
-			}
-			//
-			if(audio_written == 0) {
-				audio_written = 1;
-				ga_error("first audio frame written (pts=%lld)\n", pts);
-			}
-drop_audio_frame:
-			nsamples -= encoder->frame_size;
-			offset += encoder->frame_size * frameunit;
-			pts += encoder->frame_size;
+
+			/* Update input data references */
+			nsamples-= frame_size_samples;
+			offset+= frame_size_samples* frameunit;
+			pts+= frame_period_90KHz;
 		}
+
 		// if something has been processed
 		if(offset > 0) {
 			if(samplebytes-offset > 0) {
@@ -387,47 +409,100 @@ drop_audio_frame:
 			samplebytes -= offset;
 		}
 	}
-audio_quit:
+
+end:
 	audio_source_client_unregister(ga_gettid());
 	audio_source_buffer_deinit(ab);
 	//
 	if(samples)	free(samples);
-	if(buf)		free(buf);
 	aencoder_deinit(NULL);
 	ga_error("audio encoder: thread terminated (tid=%ld).\n", ga_gettid());
 	//
+	if(cjson_rest!= NULL)
+		cJSON_Delete(cjson_rest);
+	if(rest_str!= NULL)
+		free(rest_str);
 	return NULL;
 }
 
-static int
-aencoder_start(void *arg) {
-	if(aencoder_started != 0)
-		return 0;
-	aencoder_started = 1;
-	if(pthread_create(&aencoder_tid, NULL, aencoder_threadproc, arg) != 0) {
-		aencoder_started = 0;
-		ga_error("audio source: create thread failed.\n");
+static int aencoder_start(void *arg)
+{
+	int ret_code;
+	aencoder_arg_t *aencoder_arg= (aencoder_arg_t*)arg;
+
+	/* Check arguments */
+	if(aencoder_arg== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
 		return -1;
 	}
-	//pthread_detach(aencoder_tid);
-	return 0;
-}
 
-static int
-aencoder_stop(void *arg) {
-	void *ignored;
-	if(aencoder_started == 0)
+	if(aencoder_arg->flag_has_started!= 0)
 		return 0;
-	aencoder_started = 0;
-	//pthread_cancel(aencoder_tid);
-	pthread_join(aencoder_tid, &ignored);
+	aencoder_arg->flag_has_started= 1; // set before launching threads
+
+	/* Start encoders to multiplexers threads */
+	ret_code= pthread_create(&aencoder_thread.enc2mux_thread,
+			NULL, es_mux_thr, (void*)&aencoder_thread);
+	if(ret_code!= 0) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		aencoder_arg->flag_has_started= 0;
+		return -1;
+	}
+
+	/* Start encoding thread */
+	ret_code= pthread_create(&aencoder_thread.enc_thread,
+			NULL, aencoder_threadproc, (void*)&aencoder_thread);
+	if(ret_code!= 0) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		aencoder_arg->flag_has_started= 0;
+		return -1;
+	}
+
 	return 0;
 }
 
-ga_module_t *
-module_load() {
+static int aencoder_stop(void *arg)
+{
+	aencoder_arg_t *aencoder_arg= (aencoder_arg_t*)arg;
+	void *thread_end_code= NULL;
+
+	/* Check arguments */
+	if(aencoder_arg== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return -1;
+	}
+
+	if(aencoder_arg->flag_has_started== 0)
+		return 0;
+	aencoder_arg->flag_has_started= 0;
+
+	/* Join encoders to multiplexers threads */
+	//ga_error("Waiting thread to join... "); //comment-me
+	pthread_join(aencoder_thread.enc2mux_thread, &thread_end_code);
+	if(thread_end_code!= NULL) {
+		if(*((int*)thread_end_code)!= 0) {
+			ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		}
+		free(thread_end_code);
+		thread_end_code= NULL;
+	}
+	//ga_error("joined O.K.\n"); //comment-me
+
+	pthread_join(aencoder_thread.enc_thread, &thread_end_code);
+	if(thread_end_code!= NULL) {
+		if(*((int*)thread_end_code)!= 0) {
+			ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		}
+		free(thread_end_code);
+		thread_end_code= NULL;
+	}
+
+	return 0;
+}
+
+ga_module_t *module_load()
+{
 	static ga_module_t m;
-	struct RTSPConf *rtspconf = rtspconf_global();
 	char mime[64];
 	bzero(&m, sizeof(m));
 	m.type = GA_MODULE_TYPE_AENCODER;

@@ -37,6 +37,7 @@ extern "C" {
 /* Prototypes */
 static void* rtsp_thread(void *t);
 static void* consumer_thr_video(void *t);
+static void* consumer_thr_audio(void *t);
 static int launch_decoding_thread(struct RTSPThreadParam *rtspThreadParam,
 		const char *sdp_mimetype, int muxer_es_id);
 static void join_decoding_thread(struct RTSPThreadParam *rtspThreadParam);
@@ -46,7 +47,6 @@ static void procs_post(procs_ctx_t *procs_ctx, const char *proc_name,
 /* Implementations */
 
 struct RTSPConf *rtspconf; // Terrible global usage :(
-int image_rendered = 0;
 
 void rtsperror(const char *fmt, ...)
 {
@@ -85,7 +85,7 @@ int rtsp_client_init(struct RTSPThreadParam *rtspThreadParam)
 	}
 	rtspThreadParam->procs_ctx= procs_ctx;
 
-	/* Create FIFO for decoder -> renderer interfacing */
+	/* Create FIFO's for decoder -> renderer interfacing */
 	for(i= 0; i< VIDEO_SOURCE_CHANNEL_MAX; i++) {
 		rtspThreadParam->fifo_ctx_video_array[i]= fifo_open(
 				RENDERER_FIFO_SIZE, 0, &fifo_elem_alloc_fxn);
@@ -120,6 +120,8 @@ void rtsp_client_deinit(struct RTSPThreadParam *rtspThreadParam)
 
 	if(rtspThreadParam== NULL)
 		return;
+
+	rtspThreadParam->running= false;
 
 	/* Unblock FIFO's for decoders -> renderer interfacing */
 	for(int i= 0; i< VIDEO_SOURCE_CHANNEL_MAX; i++)
@@ -199,7 +201,7 @@ static void* rtsp_thread(void *t)
 	rtspThreadParam->audio_dec_proc_id= -1;
 	rtspThreadParam->audio_muxer_es_id= -1;
 
-	/* Receive first frame from de-multiplexer -PRELUDE-.
+	/* Receive first frame from de-multiplexer -EPILOGUE-.
 	 * The first time we receive data we have to check the elementary stream
 	 * Id's. The idea is to use the elementary stream Id's to send each
 	 * de-multiplexed frame to the correct decoding sink.
@@ -395,11 +397,8 @@ static void* consumer_thr_video(void *t)
 
 		/* **** Write encoded-decoded frame to output if applicable **** */
 
-		if(proc_frame_ctx== NULL) {
+		if(proc_frame_ctx== NULL)
 			continue;
-		}
-		printf("got decoded frame! (%dx%d)\n", (int)proc_frame_ctx->width[0],
-				(int)proc_frame_ctx->height[0]); fflush(stdout); //comment-me
 
 		/* Write frame to input FIFO.
 		 * Implementation note: we just pass the frame pointer, do not
@@ -416,12 +415,156 @@ static void* consumer_thr_video(void *t)
 		evt.user.timestamp= time(0);
 		evt.user.code= SDL_USEREVENT_RENDER_IMAGE;
 		evt.user.data1= rtspThreadParam;
-		evt.user.data2= (void*) iid;
+		evt.user.data2= (void*)(long long)iid;
 		SDL_PushEvent(&evt);
 	}
 
 	*ref_end_code= 0; // "success status"
 end:
+	if(proc_frame_ctx!= NULL)
+		proc_frame_ctx_release(&proc_frame_ctx);
+	return (void*)ref_end_code;
+}
+
+static int audio_device_open(struct RTSPThreadParam *rtspThreadParam,
+		SDL_AudioDeviceID *ref_sdl_dev)
+{
+	int end_code= -1; // '-1' means 'ERROR'
+	SDL_AudioSpec sdl_audio_spec= {0}, sdl_audio_spec_wanted= {0};
+	SDL_AudioDeviceID sdl_dev= 0;
+
+	/* Check arguments */
+	if(rtspThreadParam== NULL) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return -1;
+	}
+
+	*ref_sdl_dev= 0;
+
+	/* Initialize audio reproduction resources (SDL) */
+	SDL_memset(&sdl_audio_spec_wanted, 0, sizeof(sdl_audio_spec_wanted));
+	sdl_audio_spec_wanted.freq= rtspconf->audio_samplerate;
+	sdl_audio_spec_wanted.format= -1;
+	if(rtspconf->audio_device_format== AV_SAMPLE_FMT_S16) {
+		sdl_audio_spec_wanted.format= AUDIO_S16SYS;
+	} else {
+		rtsperror("ga-client: open audio- unsupported audio device format.\n");
+		goto end;
+	}
+	sdl_audio_spec_wanted.channels= 2; //rtspconf->audio_channels
+	sdl_audio_spec_wanted.samples= 4096;
+	sdl_audio_spec_wanted.callback= NULL;
+
+	sdl_dev= SDL_OpenAudioDevice(NULL, 0, &sdl_audio_spec_wanted,
+			&sdl_audio_spec, SDL_AUDIO_ALLOW_FORMAT_CHANGE);
+	if(sdl_dev== 0) {
+	    SDL_Log("Failed to open audio: %s", SDL_GetError());
+	    goto end;
+	}
+	if(sdl_audio_spec.format!= sdl_audio_spec_wanted.format) {
+		/* we let this one thing change. */
+		SDL_Log("We didn't get expected audio format.");
+		goto end;
+	}
+	SDL_PauseAudioDevice(sdl_dev, 0); // Start audio playing
+
+	*ref_sdl_dev= sdl_dev;
+	sdl_dev= 0; // Avoid releaseing device resources
+	end_code= 0; // 'SUCCESS'
+end:
+	if(sdl_dev> 0)
+		SDL_CloseAudioDevice(sdl_dev);
+	return end_code;
+}
+
+static void audio_device_close(SDL_AudioDeviceID sdl_dev)
+{
+	if(sdl_dev== 0) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+	SDL_CloseAudioDevice(sdl_dev);
+}
+
+static void* consumer_thr_audio(void *t)
+{
+	int audio_dec_proc_id, ret_code, *ref_end_code= NULL;
+	struct RTSPThreadParam *rtspThreadParam= (RTSPThreadParam*)t;
+	procs_ctx_t *procs_ctx= NULL;
+	proc_frame_ctx_t *proc_frame_ctx= NULL;
+	SDL_AudioDeviceID sdl_dev= 0;
+
+	/* Allocate return context; initialize to a default 'ERROR' value */
+	if((ref_end_code= (int*)malloc(sizeof(int)))== NULL) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return NULL;
+	}
+	*ref_end_code= -1; // "error status" by default
+
+	/* Check arguments */
+	if(rtspThreadParam== NULL) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+
+	/* Get variables */
+	if((procs_ctx= rtspThreadParam->procs_ctx)== NULL) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+	if((audio_dec_proc_id= rtspThreadParam->audio_dec_proc_id)< 0) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+
+	if(audio_device_open(rtspThreadParam, &sdl_dev)< 0) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		goto end;
+	}
+
+	/* **** Output loop **** */
+	while(rtspThreadParam->running== true) {
+
+		/* Receive decoded frame */
+		if(proc_frame_ctx!= NULL)
+			proc_frame_ctx_release(&proc_frame_ctx);
+		ret_code= procs_recv_frame(procs_ctx, audio_dec_proc_id,
+				&proc_frame_ctx);
+		if(ret_code!= STAT_SUCCESS) {
+			if(ret_code== STAT_EAGAIN)
+				schedule(); // Avoid closed loops
+			else
+				rtsperror("Error while receiving decoded frame'\n");
+			continue;
+		}
+
+		/* **** Write encoded-decoded frame to output if applicable **** */
+
+		if(proc_frame_ctx== NULL)
+			continue;
+
+		/* Reset audio device parameters if applicable */
+		if(proc_frame_ctx->proc_sampling_rate!= rtspconf->audio_samplerate) {
+			rtsperror("Audio samplerate changed (%d-> %d); restoring audio "
+					"device parameters.\n", rtspconf->audio_samplerate,
+					proc_frame_ctx->proc_sampling_rate);
+			audio_device_close(sdl_dev);
+			rtspconf->audio_samplerate= proc_frame_ctx->proc_sampling_rate;
+			if(audio_device_open(rtspThreadParam, &sdl_dev)< 0) {
+				rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+				goto end;
+			}
+		}
+
+		// Write frame directly to audio SDL reproducer
+		SDL_QueueAudio(sdl_dev, proc_frame_ctx->p_data[0],
+				(Uint32)proc_frame_ctx->width[0]);
+	}
+
+	*ref_end_code= 0; // "success status"
+end:
+	if(sdl_dev> 0)
+		audio_device_close(sdl_dev);
 	if(proc_frame_ctx!= NULL)
 		proc_frame_ctx_release(&proc_frame_ctx);
 	return (void*)ref_end_code;
@@ -461,6 +604,8 @@ static int launch_decoding_thread(struct RTSPThreadParam *rtspThreadParam,
 		proc_name= "ffmpeg_mlhe_dec";
 	else if(strcmp(subtype_str, "H264")== 0)
 		proc_name= "ffmpeg_x264_dec";
+	else if(strcmp(subtype_str, "MP3")== 0)
+		proc_name= "ffmpeg_mp3_dec";
 	else {
 		rtsperror("Unknown codec type '%s': not supported\n", subtype_str);
 		goto end;
@@ -468,7 +613,7 @@ static int launch_decoding_thread(struct RTSPThreadParam *rtspThreadParam,
 
 	/* Select thread routine depending on media type (audio or video) */
 	if(strcmp(type_str, "video")== 0) {
-		int iid= rtspThreadParam->iid_max; //FIXME!! use mutex!!!
+		int iid= rtspThreadParam->iid_max; //TODO: use mutex
 		vdecoder_thread_t *vdecoder_thread=
 				&rtspThreadParam->vdecoder_thread_array[iid];
 
@@ -485,7 +630,7 @@ static int launch_decoding_thread(struct RTSPThreadParam *rtspThreadParam,
 		thread_routine= consumer_thr_video;
 		thread_routine_arg= (void*)vdecoder_thread;
 
-	} else if(strcmp(subtype_str, "audio")== 0) {
+	} else if(strcmp(type_str, "audio")== 0) {
 
 		// Update parameters for the audio source (only one audio admitted)
 		rtspThreadParam->audio_muxer_es_id= muxer_es_id;
@@ -494,8 +639,8 @@ static int launch_decoding_thread(struct RTSPThreadParam *rtspThreadParam,
 		// Set decoding thread parameters
 		ref_dec_proc_id= &rtspThreadParam->audio_dec_proc_id;
 		ref_dec_thread= &rtspThreadParam->audio_dec_thread;
-		thread_routine= NULL; //FIXME!! consumer_thr_audio;
-		thread_routine_arg= NULL; //FIXME!! (void*)rtspThreadParam;
+		thread_routine= consumer_thr_audio;
+		thread_routine_arg= (void*)rtspThreadParam;
 
 	} else {
 		rtsperror("Unknown media type '%s': not supported\n", type_str);
@@ -531,11 +676,18 @@ end:
 
 static void join_decoding_thread(struct RTSPThreadParam *rtspThreadParam)
 {
+	int ret_code;
 	void *thread_end_code= NULL;
+	procs_ctx_t *procs_ctx= NULL;
 
 	/* Check argumnts */
 	if(rtspThreadParam== NULL) {
-		rtsperror("Error at line: %d\n", __LINE__);
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+
+	if((procs_ctx= rtspThreadParam->procs_ctx)== NULL) {
+		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
 		return;
 	}
 
@@ -543,7 +695,14 @@ static void join_decoding_thread(struct RTSPThreadParam *rtspThreadParam)
 	for(int i= 0; i< rtspThreadParam->iid_max; i++) {
 		vdecoder_thread_t *vdecoder_thread=
 				&rtspThreadParam->vdecoder_thread_array[i];
-		rtsperror("Waiting thread to join... "); //comment-me
+
+		// delete processore before joining to unblock
+		ret_code= procs_opt(procs_ctx, "PROCS_ID_DELETE",
+				rtspThreadParam->vdecoder_thread_array[i].video_dec_proc_id);
+		if(ret_code!= STAT_SUCCESS)
+			fprintf(stderr, "Error at line: %d\n", __LINE__);
+
+		//rtsperror("Waiting video thread to join... "); //comment-me
 		pthread_join(vdecoder_thread->video_dec_thread, &thread_end_code);
 		if(thread_end_code!= NULL) {
 			if(*((int*)thread_end_code)!= 0) {
@@ -552,11 +711,15 @@ static void join_decoding_thread(struct RTSPThreadParam *rtspThreadParam)
 			free(thread_end_code);
 			thread_end_code= NULL;
 		}
-		rtsperror("joined O.K.\n"); //comment-me
+		//rtsperror("joined O.K.\n"); //comment-me
 	}
 
 	/* Join audio decoding thread */
-	rtsperror("Waiting thread to join... "); //comment-me
+	ret_code= procs_opt(procs_ctx, "PROCS_ID_DELETE",
+			rtspThreadParam->audio_dec_proc_id);
+	if(ret_code!= STAT_SUCCESS)
+		fprintf(stderr, "Error at line: %d\n", __LINE__);
+	//rtsperror("Waiting audio thread to join... "); //comment-me
 	pthread_join(rtspThreadParam->audio_dec_thread, &thread_end_code);
 	if(thread_end_code!= NULL) {
 		if(*((int*)thread_end_code)!= 0) {
@@ -565,7 +728,7 @@ static void join_decoding_thread(struct RTSPThreadParam *rtspThreadParam)
 		free(thread_end_code);
 		thread_end_code= NULL;
 	}
-	rtsperror("joined O.K.\n"); //comment-me
+	//rtsperror("joined O.K.\n"); //comment-me
 
 	return;
 }

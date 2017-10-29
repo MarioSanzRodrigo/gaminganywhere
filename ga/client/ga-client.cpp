@@ -18,29 +18,13 @@
 
 #include <stdarg.h>
 #include <string.h>
-
 #include <pthread.h>
-#include <SDL2/SDL.h>
-#ifndef ANDROID
-//#include <SDL2/SDL_ttf.h>
-#endif /* ! ANDROID */
-#ifndef WIN32
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#endif /* ! WIN32 */
-#if ! defined WIN32 && ! defined __APPLE__ && ! defined ANDROID
-#include <X11/Xlib.h>
-#endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-#include <libavcodec/avcodec.h>
-#ifdef __cplusplus
-}
-#endif
+#include <SDL2/SDL.h>
 
 #include "rtspconf.h"
 #include "rtspclient.h"
@@ -51,35 +35,19 @@ extern "C" {
 #include "ga-common.h"
 #include "ga-conf.h"
 #include "ga-avcodec.h"
-#include "vconverter.h"
 
 #include <map>
 using namespace std;
 
 /* MediaProcessors's library related */
 extern "C" {
-#include <libcjson/cJSON.h>
-#include <libmediaprocsutils/log.h>
 #include <libmediaprocsutils/stat_codes.h>
 #include <libmediaprocsutils/fifo.h>
 #include <libmediaprocs/proc_if.h>
 #include <libmediaprocs/procs.h>
-#include <libmediaprocsmuxers/live555_rtsp.h>
-#include <libmediaprocscodecs/ffmpeg_x264.h>
-#include <libmediaprocscodecs/ffmpeg_m2v.h>
-#include <libmediaprocscodecs/ffmpeg_mp3.h>
-#include <libmediaprocscodecs/ffmpeg_lhe.h>
 }
 
-#define	POOLSIZE	16
-
-#define	IDLE_MAXIMUM_THRESHOLD		3600000	/* us */
-#define	IDLE_DETECTION_THRESHOLD	 600000 /* us */
-
 #define	WINDOW_TITLE		"Player Channel #%d (%dx%d)"
-
-pthread_mutex_t watchdogMutex;
-struct timeval watchdogTimer = {0LL, 0LL};
 
 static RTSPThreadParam rtspThreadParam;
 
@@ -94,12 +62,6 @@ static map<unsigned int, int> windowId2ch;
 
 // save files
 static FILE *savefp_keyts = NULL;
-
-#if 0 //#ifndef ANDROID
-#define	DEFAULT_FONT		"FreeSans.ttf"
-#define	DEFAULT_FONTSIZE	24
-static TTF_Font *defFont = NULL;
-#endif
 
 static void
 switch_fullscreen() {
@@ -152,13 +114,11 @@ xlat_mouseY(int ch, int y) {
 static void
 create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	int w, h;
-	AVPixelFormat format;
 	unsigned int renderer_flags = 0;
 	int renderer_index = -1;
 	SDL_Window *surface = NULL;
 	SDL_Renderer *renderer = NULL;
 	SDL_Texture *overlay = NULL;
-	struct SwsContext *swsctx = NULL;
 	char windowTitle[64];
 	//
 	pthread_mutex_lock(&rtspParam->surfaceMutex[ch]);
@@ -169,13 +129,7 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	}
 	w = rtspParam->width[ch];
 	h = rtspParam->height[ch];
-	format = rtspParam->format[ch];
 	pthread_mutex_unlock(&rtspParam->surfaceMutex[ch]);
-	// swsctx
-	if((swsctx = create_frame_converter(w, h, format, w, h, AV_PIX_FMT_YUV420P)) == NULL) {
-		rtsperror("ga-client: cannot create swsscale context.\n");
-		exit(-1);
-	}
 
 	// sdl
 	int wflag = 0;
@@ -244,8 +198,6 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	} while(0);
 	//
 	renderer = SDL_CreateRenderer(surface, renderer_index, renderer_flags);
-			//rtspconf->video_renderer_software ?
-			//	SDL_RENDERER_SOFTWARE : renderer_flags);
 	if(renderer == NULL) {
 		rtsperror("ga-client: create renderer failed.\n");
 		exit(-1);
@@ -261,7 +213,6 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	}
 	//
 	pthread_mutex_lock(&rtspParam->surfaceMutex[ch]);
-	rtspParam->swsctx[ch] = swsctx;
 	rtspParam->overlay[ch] = overlay;
 	rtspParam->renderer[ch] = renderer;
 	rtspParam->windowId[ch] = SDL_GetWindowID(surface);
@@ -269,108 +220,17 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	pthread_mutex_unlock(&rtspParam->surfaceMutex[ch]);
 	//
 	rtsperror("ga-client: window created successfully (%dx%d).\n", w, h);
-	// initialize watchdog
-	pthread_mutex_lock(&watchdogMutex);
-	gettimeofday(&watchdogTimer, NULL);
-	pthread_mutex_unlock(&watchdogMutex);
-	//
-	// RAL: Should implement "release" code in case of error...
-	// There is no destroying renderer, window, etc...!!
-	return;
-}
 
-static void
-open_audio(struct RTSPThreadParam *rtspParam, AVCodecContext *adecoder) {
-	SDL_AudioSpec wanted, spec;
-	//
-	wanted.freq = rtspconf->audio_samplerate;
-	wanted.format = -1;
-	if(rtspconf->audio_device_format == AV_SAMPLE_FMT_S16) {
-		wanted.format = AUDIO_S16SYS;
-	} else {
-		rtsperror("ga-client: open audio - unsupported audio device format.\n");
-		return;
-	}
-	wanted.channels = rtspconf->audio_channels;
-	wanted.silence = 0;
-	wanted.samples = SDL_AUDIO_BUFFER_SIZE;
-	wanted.callback = NULL; //audio_buffer_fill_sdl; //FIXME!! //RAL
-	wanted.userdata = adecoder;
-	//
-	pthread_mutex_lock(&rtspParam->audioMutex);
-	if(rtspParam->audioOpened == true) {
-		pthread_mutex_unlock(&rtspParam->audioMutex);
-		return;
-	}
-	if(SDL_OpenAudio(&wanted, &spec) < 0) {
-		pthread_mutex_unlock(&rtspParam->audioMutex);
-		rtsperror("ga-client: open audio failed - %s\n", SDL_GetError());
-		return;
-	}
-	//
-	rtspParam->audioOpened = true;
-	//
-	SDL_PauseAudio(0);
-	pthread_mutex_unlock(&rtspParam->audioMutex);
-	rtsperror("ga-client: audio device opened.\n");
-	return;
-}
-
-// negative x or y means centering-x and centering-y, respectively
-static void
-render_text(SDL_Renderer *renderer, SDL_Window *window, int x, int y, int line, const char *text) {
-#if 1 //#ifdef ANDROID
-	// not supported
-#else
-	SDL_Color textColor = {255, 255, 255};
-	SDL_Surface *textSurface = TTF_RenderText_Solid(defFont, text, textColor);
-	SDL_Rect dest = {0, 0, 0, 0}, boxRect;
-	SDL_Texture *texture;
-	int ww, wh;
-	//
-	if(window == NULL || renderer == NULL) {
-		rtsperror("render_text: Invalid window(%p) or renderer(%p) received.\n",
-			window, renderer);
-		return;
-	}
-	//
-	SDL_GetWindowSize(window, &ww, &wh);
-	// centering X/Y?
-	if(x >= 0) {	dest.x = x; }
-	else {		dest.x = (ww - textSurface->w)/2; }
-	if(y >= 0) {	dest.y = y; }
-	else {		dest.y = (wh - textSurface->h)/2; }
-	//
-	dest.y += line * textSurface->h;
-	dest.w = textSurface->w;
-	dest.h = textSurface->h;
-	//
-	boxRect.x = dest.x - 6;
-	boxRect.y = dest.y - 6;
-	boxRect.w = dest.w + 12;
-	boxRect.h = dest.h + 12;
-	//
-	if((texture = SDL_CreateTextureFromSurface(renderer, textSurface)) != NULL) {
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
-		SDL_RenderFillRect(renderer, &boxRect);
-		SDL_RenderCopy(renderer, texture, NULL, &dest);
-		SDL_DestroyTexture(texture);
-	} else {
-		rtsperror("render_text: failed on creating text texture: %s\n", SDL_GetError());
-	}
-	//
-	SDL_FreeSurface(textSurface);
-#endif
 	return;
 }
 
 static void render_image(struct RTSPThreadParam *rtspThreadParam, int ch)
 {
-#if 1 //RAL
 	SDL_Rect sdlRect;
 	int w_Y_iput, h_Y_iput, ret_code;
 	proc_frame_ctx_t *proc_frame_ctx= NULL;
 	size_t fifo_elem_size= 0;
+	SDL_Window *sdlWindow= NULL;
 	SDL_Renderer *sdlRenderer= NULL;
 	SDL_Texture *sdlTexture= NULL;
 
@@ -402,35 +262,46 @@ static void render_image(struct RTSPThreadParam *rtspThreadParam, int ch)
 	}
 
 	/* Get rendering variables */
+	sdlWindow= rtspThreadParam->surface[ch];
 	sdlRenderer= rtspThreadParam->renderer[ch];
 	sdlTexture= rtspThreadParam->overlay[ch];
-	if(sdlRenderer== NULL || sdlTexture== NULL) {
+	if(sdlWindow== NULL || sdlRenderer== NULL || sdlTexture== NULL) {
 		union SDL_Event evt;
 
-		rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
-rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__); fflush(stderr);
-		//pthread_mutex_lock(&rtspThreadParam->surfaceMutex[ch]);
-		//if(rtspThreadParam->swsctx[iid] == NULL) {
-			rtspThreadParam->width[ch] = proc_frame_ctx->width[0];
-			rtspThreadParam->height[ch] = proc_frame_ctx->height[0];
-			rtspThreadParam->format[ch] = (AVPixelFormat)AV_PIX_FMT_YUV420P;
-rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__); fflush(stderr);
-rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__); fflush(stderr);
-			//pthread_mutex_unlock(&rtspThreadParam->surfaceMutex[iid]);
-			bzero(&evt, sizeof(evt));
-			evt.user.type = SDL_USEREVENT;
-			evt.user.timestamp = time(0);
-			evt.user.code = SDL_USEREVENT_CREATE_OVERLAY;
-			evt.user.data1 = rtspThreadParam;
-			evt.user.data2 = (void*) ch;
-			SDL_PushEvent(&evt);
-			// skip the initial frame:
-			// for event handler to create/setup surfaces
-			//continue; //goto skip_frame;
-		//}
-		//pthread_mutex_unlock(&rtspThreadParam->surfaceMutex[ch]);
-			rtsperror("'%s' failed. Line %d\n", __FUNCTION__, __LINE__); fflush(stderr);
+		rtspThreadParam->width[ch] = proc_frame_ctx->width[0];
+		rtspThreadParam->height[ch] = proc_frame_ctx->height[0];
+		rtspThreadParam->format[ch] = (AVPixelFormat)AV_PIX_FMT_YUV420P;
+		bzero(&evt, sizeof(evt));
+		evt.user.type = SDL_USEREVENT;
+		evt.user.timestamp = time(0);
+		evt.user.code = SDL_USEREVENT_CREATE_OVERLAY;
+		evt.user.data1 = rtspThreadParam;
+		evt.user.data2 = (void*)(long long)ch;
+		SDL_PushEvent(&evt);
 		goto end; // Note we are skipping this frame
+	} else if(w_Y_iput!= rtspThreadParam->width[ch] ||
+			h_Y_iput!= rtspThreadParam->height[ch]) {
+
+		/* Set / backup new size */
+		rtspThreadParam->width[ch]= w_Y_iput;
+		rtspThreadParam->height[ch]= h_Y_iput;
+		windowSizeY[ch]= w_Y_iput;
+		windowSizeX[ch]= h_Y_iput;
+		rtsperror("Resize image #%d resized: w=%d h=%d\n", ch, w_Y_iput,
+				h_Y_iput);
+
+		/* Set new window size (if applicable) and restore texture */
+		pthread_mutex_lock(&rtspThreadParam->surfaceMutex[ch]);
+		SDL_SetWindowSize(sdlWindow, w_Y_iput, h_Y_iput);
+		SDL_DestroyTexture(sdlTexture);
+		rtspThreadParam->overlay[ch]= SDL_CreateTexture(sdlRenderer,
+				SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STREAMING,
+				w_Y_iput, h_Y_iput);
+		if(rtspThreadParam->overlay[ch]== NULL) {
+			rtsperror("ga-client: create overlay (textuer) failed.\n");
+			exit(-1);
+		}
+		pthread_mutex_unlock(&rtspThreadParam->surfaceMutex[ch]);
 	}
 
 	/* Specify rendering area/rectangle */
@@ -452,40 +323,6 @@ end:
 	if(proc_frame_ctx!= NULL)
 		proc_frame_ctx_release(&proc_frame_ctx);
 	return;
-#else
-	dpipe_buffer_t *data;
-	AVPicture *vframe;
-	SDL_Rect rect;
-	unsigned char *pixels;
-	int pitch;
-
-	//
-	if((data = dpipe_load_nowait(rtspParam->pipe[ch])) == NULL) {
-		return;
-	}
-	vframe = (AVPicture*) data->pointer;
-	//
-	if(SDL_LockTexture(rtspParam->overlay[ch], NULL, (void**) &pixels, &pitch) == 0) {
-		bcopy(vframe->data[0], pixels, rtspParam->width[ch] * rtspParam->height[ch]);
-		bcopy(vframe->data[1], pixels+((pitch*rtspParam->height[ch]*5)>>2), rtspParam->width[ch] * rtspParam->height[ch] / 4);
-		bcopy(vframe->data[2], pixels+pitch*rtspParam->height[ch], rtspParam->width[ch] * rtspParam->height[ch] / 4);
-		SDL_UnlockTexture(rtspParam->overlay[ch]);
-	} else {
-		rtsperror("ga-client: lock textture failed - %s\n", SDL_GetError());
-	}
-	dpipe_put(rtspParam->pipe[ch], data);
-	rect.x = 0;
-	rect.y = 0;
-	rect.w = rtspParam->width[ch];
-	rect.h = rtspParam->height[ch];
-
-	SDL_RenderCopy(rtspParam->renderer[ch], rtspParam->overlay[ch], NULL, NULL);
-	SDL_RenderPresent(rtspParam->renderer[ch]);
-
-	//
-	image_rendered = 1;
-	//
-#endif
 }
 
 void
@@ -502,12 +339,10 @@ ProcessEvent(SDL_Event *event) {
 			showCursor = 1 - showCursor;
 			//SDL_ShowCursor(showCursor);
 			switch_grab_input(NULL);
-#if 1
 			if(showCursor)
 				SDL_SetRelativeMouseMode(SDL_FALSE);
 			else
 				SDL_SetRelativeMouseMode(SDL_TRUE);
-#endif
 		}
 		// switch between fullscreen?
 		if((event->key.keysym.sym == SDLK_RETURN)
@@ -590,7 +425,6 @@ ProcessEvent(SDL_Event *event) {
 			ctrl_client_sendmsg(&m, sizeof(sdlmsg_mouse_t));
 		}
 		break;
-#if 1	// only support SDL2
 	case SDL_MOUSEWHEEL:
 		if(rtspconf->ctrlenable && rtspconf->sendmousemotion) {
 			sdlmsg_mousewheel(&m, event->motion.x, event->motion.y);
@@ -623,29 +457,12 @@ ProcessEvent(SDL_Event *event) {
 			render_image((struct RTSPThreadParam*) event->user.data1, (int) ch & 0x0ffffffff);
 			break;
 		}
-		if(event->user.code == SDL_USEREVENT_CREATE_OVERLAY) {
+		else if(event->user.code == SDL_USEREVENT_CREATE_OVERLAY) {
 			long long ch = (long long) event->user.data2;
 			create_overlay((struct RTSPThreadParam*) event->user.data1, (int) ch & 0x0ffffffff);
 			break;
 		}
-		if(event->user.code == SDL_USEREVENT_OPEN_AUDIO) {
-			open_audio(
-				(struct RTSPThreadParam*) event->user.data1,
-				(AVCodecContext*) event->user.data2);
-			break;
-		}
-		if(event->user.code == SDL_USEREVENT_RENDER_TEXT) {
-			//SDL_SetAlpha()
-			SDL_SetRenderDrawColor(rtspThreadParam.renderer[0], 0, 0, 0, 192/*SDL_ALPHA_OPAQUE/2*/);
-			//SDL_RenderFillRect(rtspThreadParam.renderer[0], NULL);
-			render_text(rtspThreadParam.renderer[0],
-				rtspThreadParam.surface[0],
-				-1, -1, 0, (const char *) event->user.data1);
-			SDL_RenderPresent(rtspThreadParam.renderer[0]);
-			break;
-		}
 		break;
-#endif /* SDL_VERSION_ATLEAST(2,0,0) */
 	case SDL_QUIT:
 		rtspThreadParam.running = false;
 		return;
@@ -656,64 +473,11 @@ ProcessEvent(SDL_Event *event) {
 	return;
 }
 
-static void *
-watchdog_thread(void *args) {
-	static char idlemsg[128];
-	struct timeval tv;
-	SDL_Event evt;
-	//
-	rtsperror("watchdog: launched, waiting for audio/video frames ...\n");
-	//
-	while(true) {
-#ifdef WIN32
-		Sleep(1000);
-#else
-		sleep(1);
-#endif
-		pthread_mutex_lock(&watchdogMutex);
-		gettimeofday(&tv, NULL);
-		if(watchdogTimer.tv_sec != 0) {
-			long long d;
-			d = tvdiff_us(&tv, &watchdogTimer);
-			if(d > IDLE_MAXIMUM_THRESHOLD) {
-				rtspThreadParam.running = false;
-				break;
-			} else if(d > IDLE_DETECTION_THRESHOLD) {
-				// update message and show
-				snprintf(idlemsg, sizeof(idlemsg),
-					"Audio/video stall detected, waiting for %d second(s) to terminate ...",
-					(int) (IDLE_MAXIMUM_THRESHOLD - d) / 1000000);
-				//
-				bzero(&evt, sizeof(evt));
-				evt.user.type = SDL_USEREVENT;
-				evt.user.timestamp = time(0);
-				evt.user.code = SDL_USEREVENT_RENDER_TEXT;
-				evt.user.data1 = idlemsg;
-				evt.user.data2 = NULL;
-				SDL_PushEvent(&evt);
-				//
-				rtsperror("watchdog: %s\n", idlemsg);
-			} else {
-				// do nothing
-			}
-		} else {
-			rtsperror("watchdog: initialized, but no frames received ...\n");
-		}
-		pthread_mutex_unlock(&watchdogMutex);
-	}
-	//
-	rtsperror("watchdog: terminated.\n");
-	exit(-1);
-	//
-	return NULL;
-}
-
 int
 main(int argc, char *argv[]) {
 	int i;
 	SDL_Event event;
 	pthread_t ctrlthread;
-	pthread_t watchdog;
 	char savefile_keyts[128];
 
 	if(argc < 3) {
@@ -745,26 +509,7 @@ main(int argc, char *argv[]) {
 		rtsperror("parse configuration failed.\n");
 		return -1;
 	}
-	//
-#if ! defined WIN32 && ! defined __APPLE__ && ! defined ANDROID
-	if(XInitThreads() == 0) {
-		rtsperror("XInitThreads() failed, client terminated.\n");
-		return -1;
-	}
-#endif
-#if 0 //#ifndef ANDROID
-	// init fonts
-	if(TTF_Init() != 0) {
-		rtsperror("cannot initialize SDL_ttf: %s\n", SDL_GetError());
-		return -1;
-	}
-	if((defFont = TTF_OpenFont(DEFAULT_FONT, DEFAULT_FONTSIZE)) == NULL) {
-		rtsperror("open font '%s' failed: %s\n",
-			DEFAULT_FONT, SDL_GetError());
-		return -1;
-	}
-#endif
-	//
+
 	rtspconf_resolve_server(rtspconf, rtspconf->servername);
 	rtsperror("Remote server @ %s[%s]:%d\n",
 		rtspconf->servername,
@@ -794,24 +539,12 @@ main(int argc, char *argv[]) {
 		}
 		pthread_detach(ctrlthread);
 	} while(0);
-	// launch watchdog
-	pthread_mutex_init(&watchdogMutex, NULL);
-	/*if(ga_conf_readbool("enable-watchdog", 1) == 1) {
-		if(pthread_create(&watchdog, NULL, watchdog_thread, NULL) != 0) {
-			rtsperror("Cannot create watchdog thread.\n");
-			return -1;
-		}
-		pthread_detach(watchdog);
-	} else {
-		ga_error("watchdog disabled.\n");
-	}*/ //FIXME!! //RAL
 
 	/* Prepare RTSP parameters and related variables */
 	bzero(&rtspThreadParam, sizeof(rtspThreadParam));
 	for(i = 0; i < VIDEO_SOURCE_CHANNEL_MAX; i++) {
 		pthread_mutex_init(&rtspThreadParam.surfaceMutex[i], NULL);
 	}
-	pthread_mutex_init(&rtspThreadParam.audioMutex, NULL);
 	rtspThreadParam.url = strdup(argv[2]);
 
 	/* Launch demultiplexing thread */
@@ -832,7 +565,6 @@ main(int argc, char *argv[]) {
 	rtsp_client_deinit(&rtspThreadParam);
 	if(rtspconf->ctrlenable)
 		pthread_cancel(ctrlthread);
-	pthread_cancel(watchdog);
 	//SDL_WaitThread(thread, &status);
 	//
 	if(savefp_keyts != NULL) {
