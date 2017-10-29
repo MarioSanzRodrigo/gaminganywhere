@@ -16,40 +16,27 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include "server-live555.h"
+
 #include <stdio.h>
 #include <pthread.h>
-#ifndef WIN32
 #include <unistd.h>
-#include <netinet/in.h>
-#include <sys/syscall.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <sys/wait.h>
-#include <sys/time.h>
-#include <arpa/inet.h>
-#endif	/* ! WIN32 */
 
-#include "ga-common.h"
 #include "ga-module.h"
-#include "encoder-common.h"
 #include "rtspconf.h"
-
-#include "server-live555.h"
 
 /* MediaProcessors's library related */
 extern "C" {
 #include <libcjson/cJSON.h>
-#include <libmediaprocsutils/log.h>
-#include <libmediaprocsutils/check_utils.h>
 #include <libmediaprocsutils/stat_codes.h>
-#include <libmediaprocsutils/fifo.h>
-#include <libmediaprocsutils/schedule.h>
-#include <libmediaprocs/proc_if.h>
 #include <libmediaprocs/procs.h>
 }
 
 /* Prototypes */
 static int live_server_deinit(void *arg);
+
+/* Implementations */
+static ga_module_t ga_module= {0};
 
 static int live_server_init(void *arg)
 {
@@ -82,7 +69,7 @@ static int live_server_init(void *arg)
 	if(p_stream_name!= NULL && strlen(p_stream_name+ 1)> 0)
 		p_stream_name+= 1;
 	else
-		p_stream_name= "ga";
+		p_stream_name= (char*)"ga";
 	snprintf(proc_settings, sizeof(proc_settings), "rtsp_port=%d"
 			"&rtsp_streaming_session_name=%s",
 			rtspconf->serverport> 0? rtspconf->serverport: 8554, p_stream_name);
@@ -162,15 +149,13 @@ static int live_server_deinit(void *arg)
 
 ga_module_t* module_load()
 {
-	static ga_module_t m;
-	//
-	bzero(&m, sizeof(m));
-	m.type = GA_MODULE_TYPE_SERVER;
-	m.name = strdup("live555-rtsp-server");
-	m.init = live_server_init;
-	m.start = live_server_start;
-	m.stop = live_server_stop;
-	m.deinit = live_server_deinit;
-	m.send_packet = NULL;
-	return &m;
+	bzero(&ga_module, sizeof(ga_module));
+	ga_module.type= GA_MODULE_TYPE_SERVER;
+	ga_module.name= strdup("live555-rtsp-server");
+	ga_module.init= live_server_init;
+	ga_module.start= live_server_start;
+	ga_module.stop= live_server_stop;
+	ga_module.deinit= live_server_deinit;
+	ga_module.send_packet= NULL;
+	return &ga_module;
 }
