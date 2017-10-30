@@ -115,7 +115,7 @@ int rtsp_client_init(struct RTSPThreadParam *rtspThreadParam)
 
 void rtsp_client_deinit(struct RTSPThreadParam *rtspThreadParam)
 {
-	int i;
+	int i, ret_code;
 	void *thread_end_code= NULL;
 
 	if(rtspThreadParam== NULL)
@@ -126,6 +126,12 @@ void rtsp_client_deinit(struct RTSPThreadParam *rtspThreadParam)
 	/* Unblock FIFO's for decoders -> renderer interfacing */
 	for(int i= 0; i< VIDEO_SOURCE_CHANNEL_MAX; i++)
 		fifo_set_blocking_mode(rtspThreadParam->fifo_ctx_video_array[i], 0);
+
+	/* Delete (thus unblock) demultiplexer processor */
+	ret_code= procs_opt(rtspThreadParam->procs_ctx, "PROCS_ID_DELETE",
+			rtspThreadParam->dmux_proc_id);
+	if(ret_code!= STAT_SUCCESS)
+		fprintf(stderr, "Error at line: %d\n", __LINE__);
 
 	/* Join audio decoding thread */
 	rtsperror("Waiting thread to join... "); //comment-me
@@ -214,7 +220,10 @@ static void* rtsp_thread(void *t)
 		ret_code= procs_recv_frame(procs_ctx, dmux_proc_id, &proc_frame_ctx);
 	}
 	if(ret_code!= STAT_SUCCESS || proc_frame_ctx== NULL) {
-		rtsperror("Error at line: %d\n", __LINE__);
+		if(rtspThreadParam->running== true)
+			rtsperror("Error at line: %d\n", __LINE__);
+		else
+			*ref_end_code= 0; // "success status"
 		goto end;
 	}
 
