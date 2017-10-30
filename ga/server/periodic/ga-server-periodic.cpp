@@ -29,8 +29,20 @@
 
 /* MediaProcessors's library related */
 extern "C" {
+#include <mongoose.h> // HTTP-server facilities
+#include <libmediaprocs/procs_api_http.h> // HTTP-REST facilities
 #include <libmediaprocs/procs.h>
 }
+
+/**
+ * HTTP-server data.
+ */
+typedef struct http_server_thr_ctx_s {
+	volatile int *ref_flag_exit;
+	const char *ref_listening_port;
+	procs_ctx_t *procs_ctx;
+} http_server_thr_ctx_t;
+
 
 // configurations:
 static char *imagepipefmt= (char*)"video-%d";
@@ -66,6 +78,8 @@ static aencoder_arg_t aencoder_arg= {
 		.flag_is_initialized= 0,
 		.flag_has_started= 0
 };
+
+static volatile int flag_app_exit= 0;
 
 int
 load_modules() {
@@ -204,9 +218,139 @@ handle_netreport(ctrlmsg_system_t *msg) {
 	return;
 }
 
-int
-main(int argc, char *argv[]) {
-	int notRunning = 0;
+static void http_event_handler(struct mg_connection *c, int ev, void *p)
+{
+#define URI_MAX 4096
+#define METH_MAX 16
+#define BODY_MAX 4096000
+
+	if(ev== MG_EV_HTTP_REQUEST) {
+		register size_t uri_len= 0, method_len= 0, qs_len= 0, body_len= 0;
+		const char *uri_p, *method_p, *qs_p, *body_p;
+		struct http_message *hm= (struct http_message*)p;
+		char *url_str= NULL, *method_str= NULL, *str_response= NULL,
+				*qstring_str= NULL, *body_str= NULL;
+		http_server_thr_ctx_t *http_server_thr_ctx= (http_server_thr_ctx_t*)
+				c->user_data;
+
+		if((uri_p= hm->uri.p)!= NULL && (uri_len= hm->uri.len)> 0 &&
+				uri_len< URI_MAX) {
+			url_str= (char*)calloc(1, uri_len+ 1);
+			if(url_str!= NULL)
+				memcpy(url_str, uri_p, uri_len);
+		}
+		if((method_p= hm->method.p)!= NULL && (method_len= hm->method.len)> 0
+				 && method_len< METH_MAX) {
+			method_str= (char*)calloc(1, method_len+ 1);
+			if(method_str!= NULL)
+				memcpy(method_str, method_p, method_len);
+		}
+		if((qs_p= hm->query_string.p)!= NULL &&
+				(qs_len= hm->query_string.len)> 0 && qs_len< URI_MAX) {
+			qstring_str= (char*)calloc(1, qs_len+ 1);
+			if(qstring_str!= NULL)
+				memcpy(qstring_str, qs_p, qs_len);
+		}
+		if((body_p= hm->body.p)!= NULL && (body_len= hm->body.len)> 0
+				&& body_len< BODY_MAX) {
+			body_str= (char*)calloc(1, body_len+ 1);
+			if(body_str!= NULL)
+				memcpy(body_str, body_p, body_len);
+		}
+
+		/* Process HTTP request */
+		if(url_str!= NULL && method_str!= NULL)
+			procs_api_http_req_handler(http_server_thr_ctx->procs_ctx, url_str,
+					qstring_str, method_str, body_str, body_len, &str_response);
+		/* Send response */
+		if(str_response!= NULL && strlen(str_response)> 0) {
+			//printf("str_response: %s (len: %d)\n", str_response,
+			//		(int)strlen(str_response)); //comment-me
+			mg_printf(c, "%s", "HTTP/1.1 200 OK\r\n");
+			mg_printf(c, "Content-Length: %d\r\n", (int)strlen(str_response));
+			mg_printf(c, "\r\n");
+			mg_printf(c, "%s", str_response);
+		} else {
+			mg_printf(c, "%s", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+		}
+
+		if(str_response!= NULL)
+			free(str_response);
+		if(url_str!= NULL)
+			free(url_str);
+		if(method_str!= NULL)
+			free(method_str);
+		if(qstring_str!= NULL)
+			free(qstring_str);
+		if(body_str!= NULL)
+			free(body_str);
+	} else if(ev== MG_EV_RECV) {
+		mg_printf(c, "%s", "HTTP/1.1 202 ACCEPTED\r\nContent-Length: 0\r\n");
+	} else if(ev== MG_EV_SEND) {
+		mg_printf(c, "%s", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+	}
+#undef URI_MAX 4096
+#undef METH_MAX 16
+#undef BODY_MAX 4096000
+}
+
+/*
+ * Runs HTTP server thread, listening to the given port.
+ */
+static void* http_server_thr(void *t)
+{
+	struct mg_mgr mgr;
+	struct mg_connection *c;
+	http_server_thr_ctx_t *http_server_thr_ctx= (http_server_thr_ctx_t*)t;
+	struct mg_bind_opts opts;
+	const char *error_str= NULL;
+
+	/* Check argument */
+	if(http_server_thr_ctx== NULL) {
+		fprintf(stderr, "Bad argument '%s'\n", __FUNCTION__);
+		exit(1);
+	}
+
+	/* Create and configure the server */
+	mg_mgr_init(&mgr, NULL);
+
+	memset(&opts, 0, sizeof(opts));
+	opts.error_string= &error_str;
+	opts.user_data= http_server_thr_ctx;
+	c= mg_bind_opt(&mgr, http_server_thr_ctx->ref_listening_port,
+			http_event_handler, opts);
+	if(c== NULL) {
+		fprintf(stderr, "mg_bind_opt(localhost:%s) failed: %s\n",
+				http_server_thr_ctx->ref_listening_port, error_str);
+		exit(EXIT_FAILURE);
+	}
+	mg_set_protocol_http_websocket(c);
+
+	while(*http_server_thr_ctx->ref_flag_exit== 0)
+		mg_mgr_poll(&mgr, 1000);
+
+	mg_mgr_free(&mgr);
+	return NULL;
+}
+
+static void stream_proc_quit_signal_handler(int)
+{
+	printf("signaling application to finalize...\n"); fflush(stdout);
+	flag_app_exit= 1;
+}
+
+int main(int argc, char *argv[])
+{
+	sigset_t set;
+	char *endptr, *http_server_port_p= NULL, *http_server_port= "8080";
+	char conf_buf[64]= {0};
+	http_server_thr_ctx_t http_server_thr_ctx= {0};
+
+	/* Set SIGNAL handlers to this process */
+	sigfillset(&set);
+	sigdelset(&set, SIGINT);
+	pthread_sigmask(SIG_SETMASK, &set, NULL);
+	signal(SIGINT, stream_proc_quit_signal_handler);
 
 	if(argc < 2) {
 		fprintf(stderr, "usage: %s config-file\n", argv[0]);
@@ -237,10 +381,30 @@ main(int argc, char *argv[]) {
 	if(run_modules() < 0)	 	{ return -1; }
 	// enable handler to monitored network status
 	ctrlsys_set_handler(CTRL_MSGSYS_SUBTYPE_NETREPORT, handle_netreport);
-	//
-	while(1) {
-		usleep(5000000);
+
+	/* Set HTTP-server listening port */
+	if((http_server_port_p= ga_conf_readv("http-server-port", conf_buf,
+			sizeof(conf_buf)))!= NULL) {
+		int val= strtol(http_server_port_p, &endptr, 10);
+		if(endptr!= http_server_port_p) {
+			http_server_port= http_server_port_p;
+			//printf("Http-port is %ld\n", val); fflush(stdout); //comment-me
+		}
 	}
+
+	/* Launch HTTP-server */
+	if(procs_ctx== NULL) { // Sanity check
+		ga_error("PROCS module should be initialized previously.\n");
+		exit(-1);
+	}
+	http_server_thr_ctx.ref_flag_exit= &flag_app_exit;
+	http_server_thr_ctx.ref_listening_port= http_server_port;
+	http_server_thr_ctx.procs_ctx= procs_ctx;
+	printf("Starting server...\n"); fflush(stdout);
+	http_server_thr(&http_server_thr_ctx);
+	//while(1) {
+	//	usleep(5000000);
+	//}
 	// alternatively, it is able to create a thread to run rtspserver_main:
 	//	pthread_create(&t, NULL, rtspserver_main, NULL);
 	//
