@@ -34,6 +34,15 @@ extern "C" {
 #include <libmediaprocscodecs/ffmpeg_lhe.h>
 }
 
+/* RTSP latency profiler */
+#define PROFILE_MUX_LATENCY_E2E
+#define PROFILE_LATENCY_E2E_GET_TIMESTAMP(FRAME) \
+	profile_latency_e2e_get_timestamp(FRAME)
+#ifdef PROFILE_MUX_LATENCY_E2E
+#else
+#define PROFILE_LATENCY_E2E_GET_TIMESTAMP(FRAME)
+#endif
+
 /* Prototypes */
 static void* rtsp_thread(void *t);
 static void* consumer_thr_video(void *t);
@@ -58,6 +67,69 @@ void rtsperror(const char *fmt, ...)
 	va_end(ap);
 	pthread_mutex_unlock(&mutex);
 	return;
+}
+
+static inline void profile_latency_e2e_get_timestamp(
+		proc_frame_ctx_t *proc_frame_ctx)
+{
+	int lsize, height, width;
+	struct timespec t_lat;
+	uint32_t send_usecs, recv_usecs, latency= 0;
+	const int sizeof_uint32= sizeof(uint32_t);
+	const int avg_cnt_max= 60; // 60 frames average
+	static int64_t latency_avg= 0;
+	static int avg_cnt= 0;
+
+	/* Check arguments */
+	if(proc_frame_ctx== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+
+	lsize= proc_frame_ctx->linesize[0];
+	height= proc_frame_ctx->height[0];
+	width= proc_frame_ctx->width[0];
+
+	/* We should have compressed 1-dimensional data in our buffer (data
+	 * is pointed by the first frame) and a 32-bit STC value attached at
+	 * the end of the buffer (pointed by the second frame).
+	 *  */
+	if(proc_frame_ctx->p_data[0]== NULL || !(lsize> 0) || height!= 1 ||
+			proc_frame_ctx->p_data[1]!= NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+
+	/* Correct the frame dimensions (exclude STC allocation) */
+	proc_frame_ctx->linesize[0]= lsize- sizeof_uint32;
+	proc_frame_ctx->width[0]= width- sizeof_uint32;
+
+	/* Store STC time-stamp */
+	clock_gettime(CLOCK_MONOTONIC, &t_lat);
+	recv_usecs= (uint32_t)
+			((uint64_t)t_lat.tv_sec*1000000+ (uint64_t)t_lat.tv_nsec/1000);
+	send_usecs=  proc_frame_ctx->p_data[0][width- 4]<< 24;
+	send_usecs|= proc_frame_ctx->p_data[0][width- 3]<< 16;
+	send_usecs|= proc_frame_ctx->p_data[0][width- 2]<< 8;
+	send_usecs|= proc_frame_ctx->p_data[0][width- 1];
+	//printf("recv: 0x%0x, send: 0x%0x\n", recv_usecs, send_usecs); //comment-me
+	//fflush(stdout); //comment-me
+	if(recv_usecs> send_usecs)
+		latency= recv_usecs- send_usecs;
+	else rtsperror("'%s' failed. Line %d\n",
+			__FUNCTION__, __LINE__); //comment-me
+
+	/* Trace latency if applicable */
+	if(latency> 0) {
+		latency_avg+= latency;
+		avg_cnt++;
+	}
+	if(avg_cnt> 0 && avg_cnt>= avg_cnt_max) {
+		printf("\nRTSP Latency average over %d frames [usecs]: %u\n", avg_cnt,
+				latency_avg/avg_cnt);
+		latency_avg= 0;
+		avg_cnt= 0;
+	}
 }
 
 int rtsp_client_init(struct RTSPThreadParam *rtspThreadParam)
@@ -317,6 +389,8 @@ static void* rtsp_thread(void *t)
 		/* Send received encoded frame to decoder */
 		if(proc_frame_ctx== NULL)
 			continue;
+
+		PROFILE_LATENCY_E2E_GET_TIMESTAMP(proc_frame_ctx);
 
 		/* Get decoder processor id. to know which one to send the frame */
 		dec_proc_id= -1;

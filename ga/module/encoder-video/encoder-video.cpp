@@ -43,9 +43,16 @@ extern "C" {
 /* Maximum parameter length (e.g. "pipe" names) */
 #define	MAXPARAMLEN	64
 
-/* CRC-32C (iSCSI) polynomial in reversed bit order. */
-#define POLY 0x82f63b78
+/* RTSP latency profiler */
+#define PROFILE_MUX_LATENCY_E2E
+#define PROFILE_LATENCY_E2E_SET_TIMESTAMP(FRAME) \
+	profile_latency_e2e_set_timestamp(FRAME)
+#ifdef PROFILE_MUX_LATENCY_E2E
+#else
+#define PROFILE_LATENCY_E2E_SET_TIMESTAMP(FRAME)
+#endif
 
+/* Video encoder thread parameters */
 typedef struct vencoder_thread_s {
 	vencoder_arg_t *vencoder_arg;
 	int iid;
@@ -60,17 +67,64 @@ static int vencoder_deinit(void *arg);
 
 static struct vencoder_thread_s vencoder_thread_array[VIDEO_SOURCE_CHANNEL_MAX];
 
-uint32_t crc32c(uint32_t crc, const unsigned char *buf, size_t len)
+static inline void profile_latency_e2e_set_timestamp(
+		proc_frame_ctx_t *proc_frame_ctx)
 {
-    int k;
+	int lsize, height, width, plane_off= 0, buf_size= 0;
+	struct timespec t_lat;
+	uint32_t usecs;
+	uint8_t *data_plane0_p= NULL, *data_p= NULL;
+	const int sizeof_uint32= sizeof(uint32_t);
 
-    crc = ~crc;
-    while (len--) {
-        crc ^= *buf++;
-        for (k = 0; k < 8; k++)
-            crc = crc & 1 ? (crc >> 1) ^ POLY : crc >> 1;
-    }
-    return ~crc;
+	/* Check arguments */
+	if(proc_frame_ctx== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+
+	data_p= proc_frame_ctx->data;
+	data_plane0_p= (uint8_t*)proc_frame_ctx->p_data[0];
+	lsize= proc_frame_ctx->linesize[0];
+	height= proc_frame_ctx->height[0];
+	width= proc_frame_ctx->width[0];
+
+	/* We should have compressed 1-dimensional data in our buffer
+	 * (thus, only the first plane of the buffer should be used) */
+	if(data_plane0_p== NULL || !(lsize> 0) || height!= 1 ||
+			proc_frame_ctx->p_data[1]!= NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+
+	/* Resize buffer to be able to attach 32-bits at the end for the
+	 * system-time clock (STC).
+	 */
+	plane_off= data_plane0_p- data_p;
+	if(plane_off< 0) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+	buf_size= lsize+ plane_off;
+	data_p= (uint8_t*)realloc(data_p, buf_size+ sizeof_uint32);
+	if(data_p== NULL) {
+		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
+		return;
+	}
+	// Set reallocated buffer pointer and references
+	proc_frame_ctx->data= data_p;
+	proc_frame_ctx->p_data[0]= data_plane0_p= data_p+ plane_off;
+	proc_frame_ctx->linesize[0]= lsize+ sizeof_uint32;
+	proc_frame_ctx->width[0]= width+ sizeof_uint32;
+
+	/* Store STC time-stamp */
+	clock_gettime(CLOCK_MONOTONIC, &t_lat);
+	usecs= (uint32_t)
+			((uint64_t)t_lat.tv_sec*1000000+ (uint64_t)t_lat.tv_nsec/1000);
+	//printf("0x%0x\n", usecs); fflush(stdout); // comment-me
+	data_plane0_p[width+ 0]= (usecs>> 24)& 0xFF;
+	data_plane0_p[width+ 1]= (usecs>> 16)& 0xFF;
+	data_plane0_p[width+ 2]= (usecs>>  8)& 0xFF;
+	data_plane0_p[width+ 3]= usecs& 0xFF;
 }
 
 static void* es_mux_thr(void *arg)
@@ -134,6 +188,9 @@ static void* es_mux_thr(void *arg)
 			continue;
 		//ga_error("Got frame!! (%dx%d)\n", proc_frame_ctx->width[0],
 		//		proc_frame_ctx->height[0]); //comment-me
+
+		PROFILE_LATENCY_E2E_SET_TIMESTAMP(proc_frame_ctx);
+
 		proc_frame_ctx->es_id= vencoder_thread->muxer_es_id;
 		ret_code= procs_send_frame(procs_ctx, vencoder_arg->muxer_proc_id,
 				proc_frame_ctx);
@@ -204,7 +261,9 @@ static int vencoder_init(void *arg)
 		vencoder_thread_array[iid].enc_proc_id= -1;
 		vencoder_thread_array[iid].muxer_es_id= -1;
 		snprintf(proc_settings, sizeof(proc_settings),
-				"width_output=%d&height_output=%d", outputW, outputH);
+				"width_output=%d&height_output=%d"
+				"&flag_zerolatency=true&conf_preset=faster",
+				outputW, outputH);
 		//ga_error("proc_settings: '%s'\n", proc_settings); //comment-me
 		ret_code= procs_opt(procs_ctx, "PROCS_POST",
 				rtspconf->video_encoder_name[0], proc_settings, &rest_str);
