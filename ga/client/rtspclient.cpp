@@ -390,13 +390,15 @@ static void* rtsp_thread(void *t)
 		if(proc_frame_ctx== NULL)
 			continue;
 
-		PROFILE_LATENCY_E2E_GET_TIMESTAMP(proc_frame_ctx);
-
 		/* Get decoder processor id. to know which one to send the frame */
 		dec_proc_id= -1;
 		if(proc_frame_ctx->es_id== rtspThreadParam->audio_muxer_es_id) {
 			dec_proc_id= rtspThreadParam->audio_dec_proc_id;
 		} else {
+
+			/* Video only */
+			PROFILE_LATENCY_E2E_GET_TIMESTAMP(proc_frame_ctx);
+
 			for(int i= 0; i< rtspThreadParam->iid_max; i++) {
 				vdecoder_thread_t *vdecoder_thread=
 						&rtspThreadParam->vdecoder_thread_array[i];
