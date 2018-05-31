@@ -19,8 +19,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <time.h>
-#include <pthread.h>
 
 #include "ga-common.h"
 #include "ga-conf.h"
@@ -29,28 +27,12 @@
 #include "controller.h"
 #include "encoder-common.h"
 
-#include "/home/mario/VIRTUOSE/MediaProcessors_selfcontained/MediaProcessors/codecs/src/video_settings.h"
-
 /* MediaProcessors's library related */
 extern "C" {
 #include <mongoose.h> // HTTP-server facilities
 #include <libmediaprocs/procs_api_http.h> // HTTP-REST facilities
 #include <libmediaprocs/procs.h>
-#include <libmediaprocs/proc_if.h>
-#include <libmediaprocs/proc.h>
 }
-
-
-#include<stdio.h> 
-#include<string.h> 
-#include<stdlib.h>
-#include<arpa/inet.h>
-#include<sys/socket.h>
-#include <sys/types.h>
-
- 
-#define BUFLEN 512  //Longitud max del buffer
-#define PORT 8888
 
 /**
  * HTTP-server data.
@@ -60,15 +42,6 @@ typedef struct http_server_thr_ctx_s {
 	const char *ref_listening_port;
 	procs_ctx_t *procs_ctx;
 } http_server_thr_ctx_t;
-
-
-typedef struct socket_thr_ctx_s {
-	volatile int *ref_flag_exit;
-	const char *ref_listening_port;
-	procs_ctx_t *procs_ctx;
-} socket_thr_ctx_t;
-
-struct timespec ts1, ts3;
 
 
 // configurations:
@@ -364,114 +337,20 @@ static void stream_proc_quit_signal_handler(int)
 {
 	printf("signaling application to finalize...\n"); fflush(stdout);
 	flag_app_exit= 1;
-	exit(-1);
-}
-
-void die(char *s)
-{
-	perror(s);
-	exit(1);
-}
-
-static void* socket_server_thr(void *t)
-{
-
-    	socket_thr_ctx_t *socket_thr_ctx= (socket_thr_ctx_t*)t;
-	const char *error_str= NULL;
-
-	// Check argument 
-	if(socket_thr_ctx== NULL) {
-		fprintf(stderr, "Bad argument '%s'\n", __FUNCTION__);
-		exit(1);
-	}
-
-   	struct sockaddr_in serv_addr, serv_other;
-    	int s, i, recv_len;
-    	char buf[BUFLEN]="";
-    	socklen_t slen = sizeof(serv_other);
-     
-    	// Creacion del Socket en funcion del tipo de protocolo
-    	if ((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
-    	{
-        	die("socket");
-    	}
-     
-    	// Inicializar a cero el struct serv_addr
-    	memset((char *) &serv_addr, 0, sizeof(serv_addr));
-     
-    	serv_addr.sin_family = AF_INET;
-    	serv_addr.sin_port = htons(atoi("8888"));
-    	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-     
-    	// Enlazar socket al puerto
-    	if( bind(s , (struct sockaddr*)&serv_addr, sizeof(serv_addr) ) == -1)
-    	{
-        	die("bind");
-    	}
-
-     
-    	// Escuchando para recibir datos
-    	while(flag_app_exit== 0)
-    	{
-		while(1)
-	    	{
-			printf("\nWaiting for data...\n");
-			fflush(stdout);
-
-			// Tratamos de recibir los datos
-			if ((recv_len = recvfrom(s, buf, BUFLEN, 0, (struct sockaddr *) &serv_other, &slen)) == -1)
-			{
-			    die("recvfrom()");
-			}
-			printf("Pillo el ts1\n");
-			clock_gettime( CLOCK_REALTIME, &ts1);
-			printf("TS1: %f\n", (float) (1.0*ts1.tv_nsec)*1e-9);
-
-			// Mostramos string recibido (funcion , valor) 
-			printf("\nReceived packet from %s:%d\n", inet_ntoa(serv_other.sin_addr), ntohs(serv_other.sin_port));
-			printf("Datos enviados: %s\n" , buf);
-	
-
-
-			// Forzamos el tercer campo "proc_id" a 1.
-			//procs_opt(socket_thr_ctx->procs_ctx, "PROCS_ID_PUT",1,buf);
-
-			//NOTA el 1 corresponde al ENCODER
-			procs_opt(socket_thr_ctx->procs_ctx, "PROCS_ID_SOCKET",1,buf);
-	
-			//[Para TEST] Enviamos ACK
-			sendto(s, "ACK", 3, 0, (struct sockaddr*) &serv_other, slen);
-
-
-			// Puesta a cero de los buffers y las variables aux
-			memset(buf,'\0', sizeof(buf));
-
-
-
-		}
-	}
-    	close(s);
-    	return NULL;
 }
 
 int main(int argc, char *argv[])
 {
-
-	pthread_t socket_thread;
-//--------------------------------------------------------------------------------------------	
 	sigset_t set;
-	char *endptr, *http_server_port_p= NULL, *http_server_port= "8088";
-	http_server_thr_ctx_t http_server_thr_ctx= {0};
+	char *endptr, *http_server_port_p= NULL, *http_server_port= "8080";
 	char conf_buf[64]= {0};
-	char *socket_port= "8888";
-	socket_thr_ctx_t socket_thr_ctx= {0};	//Mario
+	http_server_thr_ctx_t http_server_thr_ctx= {0};
 
 	/* Set SIGNAL handlers to this process */
 	sigfillset(&set);
 	sigdelset(&set, SIGINT);
 	pthread_sigmask(SIG_SETMASK, &set, NULL);
 	signal(SIGINT, stream_proc_quit_signal_handler);
-//--------------------------------------------------------------------------------------------
 
 	if(argc < 2) {
 		fprintf(stderr, "usage: %s config-file\n", argv[0]);
@@ -500,26 +379,9 @@ int main(int argc, char *argv[])
 	if(load_modules() < 0)	 	{ return -1; }
 	if(init_modules() < 0)	 	{ return -1; }
 	if(run_modules() < 0)	 	{ return -1; }
-
 	// enable handler to monitored network status
 	ctrlsys_set_handler(CTRL_MSGSYS_SUBTYPE_NETREPORT, handle_netreport);
 
-	// Launch UDP Socket 
-	if(procs_ctx== NULL) { // Sanity check
-		printf("PROCS module should be initialized previously.\n");
-		exit(-1);
-	}
-
-	//printf("Starting Socket...\n");
-	socket_thr_ctx.ref_flag_exit = &flag_app_exit;
-	socket_thr_ctx.ref_listening_port= "8888";
-	socket_thr_ctx.procs_ctx = procs_ctx;
-
-	printf("Starting Socket UDP Server...\n");
-	pthread_create(&socket_thread, NULL, socket_server_thr, &socket_thr_ctx); //MARIO
-	//socket_server_thr(&socket_thr_ctx);
-
-//--------------------------------------------------------------------------------------------
 	/* Set HTTP-server listening port */
 	if((http_server_port_p= ga_conf_readv("http-server-port", conf_buf,
 			sizeof(conf_buf)))!= NULL) {
@@ -530,7 +392,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	// Launch HTTP-server //
+	/* Launch HTTP-server */
 	if(procs_ctx== NULL) { // Sanity check
 		ga_error("PROCS module should be initialized previously.\n");
 		exit(-1);
@@ -538,11 +400,8 @@ int main(int argc, char *argv[])
 	http_server_thr_ctx.ref_flag_exit= &flag_app_exit;
 	http_server_thr_ctx.ref_listening_port= http_server_port;
 	http_server_thr_ctx.procs_ctx= procs_ctx;
-	printf("Starting HTTP server...\n");
+	printf("Starting server...\n"); fflush(stdout);
 	http_server_thr(&http_server_thr_ctx);
-
-//--------------------------------------------------------------------------------------------
-	pthread_join(socket_thread, NULL); //MARIO
 	//while(1) {
 	//	usleep(5000000);
 	//}
