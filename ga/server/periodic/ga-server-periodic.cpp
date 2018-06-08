@@ -29,7 +29,7 @@
 #include "controller.h"
 #include "encoder-common.h"
 
-#include "/home/mario/VIRTUOSE/MediaProcessors_selfcontained/MediaProcessors/codecs/src/video_settings.h"
+//#include "/home/mario/VIRTUOSE/MediaProcessors_selfcontained/MediaProcessors/codecs/src/video_settings.h"
 
 /* MediaProcessors's library related */
 extern "C" {
