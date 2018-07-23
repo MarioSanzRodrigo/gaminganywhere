@@ -52,6 +52,7 @@ extern "C" {
 #include <libmediaprocscodecs/ffmpeg_m2v.h>
 #include <libmediaprocscodecs/ffmpeg_lhe.h>
 #include <libmediaprocscodecs/ffmpeg_mp3.h>
+#include <libmediaprocsmuxers/payloader_upm_rtsp.h>
 #include <libmediaprocsmuxers/live555_rtsp.h>
 }
 
@@ -370,6 +371,13 @@ ga_init(const char *config, const char *url) {
 		ga_error("GA: Could not register processor type.\n");
 		return -1;
 	}
+	// [PAYLOADER UPM]
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_payloader_upm_rtsp_mux)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+	// [PAYLAODER Live555]
 	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_live555_rtsp_mux)!=
 			STAT_SUCCESS) {
 		ga_error("GA: Could not register processor type.\n");
