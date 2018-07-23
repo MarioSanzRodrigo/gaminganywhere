@@ -28,6 +28,7 @@ extern "C" {
 #include <libmediaprocs/proc_if.h>
 #include <libmediaprocs/procs.h>
 #include <libmediaprocsmuxers/live555_rtsp.h>
+#include <libmediaprocsmuxers/payloader_upm_rtsp.h>
 #include <libmediaprocscodecs/ffmpeg_x264.h>
 #include <libmediaprocscodecs/ffmpeg_m2v.h>
 #include <libmediaprocscodecs/ffmpeg_mp3.h>
