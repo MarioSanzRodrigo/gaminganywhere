@@ -169,6 +169,15 @@ int rtsp_client_init(struct RTSPThreadParam *rtspThreadParam)
 	}
 
     /* Register RTSP de-multiplexer instance and get corresponding Id. */
+
+/* ############ [TODO INTEGRAR PAYLOADER UPM]
+
+	snprintf(proc_settings, sizeof(proc_settings), "rtsp_url=%s",
+			rtspThreadParam->url);
+	procs_post(procs_ctx, proc_if_payloader_upm_rtsp_mux.proc_name, proc_settings,
+			&rtspThreadParam->dmux_proc_id);
+
+*/
 	snprintf(proc_settings, sizeof(proc_settings), "rtsp_url=%s",
 			rtspThreadParam->url);
 	procs_post(procs_ctx, proc_if_live555_rtsp_dmux.proc_name, proc_settings,
