@@ -47,7 +47,7 @@ extern "C" {
 #include <libmediaprocs/procs.h>
 }
 
-#define	WINDOW_TITLE		"Player Channel #%d (%dx%d)"
+#define	WINDOW_TITLE		"Player Channel (%dx%d)"
 
 static RTSPThreadParam rtspThreadParam;
 
