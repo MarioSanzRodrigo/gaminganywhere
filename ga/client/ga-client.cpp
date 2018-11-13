@@ -60,6 +60,10 @@ static int nativeSizeX[VIDEO_SOURCE_CHANNEL_MAX];
 static int nativeSizeY[VIDEO_SOURCE_CHANNEL_MAX];
 static map<unsigned int, int> windowId2ch;
 
+int var_control = 0;
+int event_w_Y_iput = 0;
+int event_h_Y_iput = 0;
+
 // save files
 static FILE *savefp_keyts = NULL;
 
@@ -129,6 +133,7 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 	}
 	w = rtspParam->width[ch];
 	h = rtspParam->height[ch];
+
 	pthread_mutex_unlock(&rtspParam->surfaceMutex[ch]);
 
 	// sdl
@@ -226,6 +231,7 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 
 static void render_image(struct RTSPThreadParam *rtspThreadParam, int ch)
 {
+	//rtsperror("entro en render image\n");
 	SDL_Rect sdlRect;
 	int w_Y_iput, h_Y_iput, ret_code;
 	proc_frame_ctx_t *proc_frame_ctx= NULL;
@@ -254,8 +260,19 @@ static void render_image(struct RTSPThreadParam *rtspThreadParam, int ch)
 	}
 
 	/* Get and check input frame with and height */
-	w_Y_iput= proc_frame_ctx->width[0];
-	h_Y_iput= proc_frame_ctx->height[0];
+	if(var_control == 0){
+	
+		w_Y_iput= proc_frame_ctx->width[0];
+		//rtsperror("w_Y_iput %d\n", w_Y_iput);
+		h_Y_iput= proc_frame_ctx->height[0];
+		//rtsperror("h_Y_iput %d\n", h_Y_iput);
+	}else{
+		w_Y_iput= event_w_Y_iput;
+		//rtsperror("event w_Y_iput %d\n", w_Y_iput);
+		h_Y_iput= event_h_Y_iput;
+		//rtsperror("event h_Y_iput %d\n", h_Y_iput);
+	}
+
 	if(w_Y_iput<= 0 || h_Y_iput<= 0) {
 		rtsperror("Invalid frame size at renderer\n");
 		goto end;
@@ -266,6 +283,7 @@ static void render_image(struct RTSPThreadParam *rtspThreadParam, int ch)
 	sdlRenderer= rtspThreadParam->renderer[ch];
 	sdlTexture= rtspThreadParam->overlay[ch];
 	if(sdlWindow== NULL || sdlRenderer== NULL || sdlTexture== NULL) {
+		//rtsperror("entro en render image,  if\n");
 		union SDL_Event evt;
 
 		rtspThreadParam->width[ch] = proc_frame_ctx->width[0];
@@ -281,32 +299,39 @@ static void render_image(struct RTSPThreadParam *rtspThreadParam, int ch)
 		goto end; // Note we are skipping this frame
 	} else if(w_Y_iput!= rtspThreadParam->width[ch] ||
 			h_Y_iput!= rtspThreadParam->height[ch]) {
+		//rtsperror("entro en render image,  else\n");
 
 		/* Set / backup new size */
-		rtspThreadParam->width[ch]= w_Y_iput;
-		rtspThreadParam->height[ch]= h_Y_iput;
-		windowSizeY[ch]= w_Y_iput;
-		windowSizeX[ch]= h_Y_iput;
-		rtsperror("Resize image #%d resized: w=%d h=%d\n", ch, w_Y_iput,
-				h_Y_iput);
+		if(var_control==0){
+			rtspThreadParam->width[ch]= w_Y_iput;
+			rtspThreadParam->height[ch]= h_Y_iput;
+			windowSizeY[ch]= w_Y_iput;
+			windowSizeX[ch]= h_Y_iput;
+			rtsperror("Resize image #%d resized: w=%d h=%d\n", ch, w_Y_iput,
+					h_Y_iput);
 
-		/* Set new window size (if applicable) and restore texture */
-		pthread_mutex_lock(&rtspThreadParam->surfaceMutex[ch]);
-		SDL_SetWindowSize(sdlWindow, w_Y_iput, h_Y_iput);
-		SDL_DestroyTexture(sdlTexture);
-		rtspThreadParam->overlay[ch]= SDL_CreateTexture(sdlRenderer,
-				SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STREAMING,
-				w_Y_iput, h_Y_iput);
-		if(rtspThreadParam->overlay[ch]== NULL) {
-			rtsperror("ga-client: create overlay (textuer) failed.\n");
-			exit(-1);
+			/* Set new window size (if applicable) and restore texture */
+			pthread_mutex_lock(&rtspThreadParam->surfaceMutex[ch]);
+			SDL_SetWindowSize(sdlWindow, w_Y_iput, h_Y_iput);
+			SDL_DestroyTexture(sdlTexture);
+			rtspThreadParam->overlay[ch]= SDL_CreateTexture(sdlRenderer,
+					SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STREAMING,
+					w_Y_iput, h_Y_iput);
+			if(rtspThreadParam->overlay[ch]== NULL) {
+				rtsperror("ga-client: create overlay (textuer) failed.\n");
+				exit(-1);
+			}
+			pthread_mutex_unlock(&rtspThreadParam->surfaceMutex[ch]);
+		}else{
+			windowSizeY[ch]= event_w_Y_iput;
+			windowSizeX[ch]= event_h_Y_iput;
 		}
-		pthread_mutex_unlock(&rtspThreadParam->surfaceMutex[ch]);
 	}
 
 	/* Specify rendering area/rectangle */
 	sdlRect.x= 0;
 	sdlRect.y= 0;
+	//rtsperror("entro en render image - sdlRect w/h,\n");
 	sdlRect.w= w_Y_iput;
 	sdlRect.h= h_Y_iput;
 
@@ -317,7 +342,9 @@ static void render_image(struct RTSPThreadParam *rtspThreadParam, int ch)
 			proc_frame_ctx->p_data[2], proc_frame_ctx->linesize[2]);
 	SDL_RenderClear(sdlRenderer);
 	SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, &sdlRect);
+	//rtsperror("Render image - SDL_RenderCopy,\n");
 	SDL_RenderPresent(sdlRenderer);
+	//rtsperror("Render image - SDL_RenderPresent,\n");
 
 end:
 	if(proc_frame_ctx!= NULL)
@@ -442,6 +469,9 @@ ProcessEvent(SDL_Event *event) {
 				char title[64];
 				w = event->window.data1;
 				h = event->window.data2;
+				event_w_Y_iput = w;
+				event_h_Y_iput = h;
+				var_control = 1;
 				windowSizeX[ch] = w;
 				windowSizeY[ch] = h;
 				snprintf(title, sizeof(title), WINDOW_TITLE, ch, w, h);
