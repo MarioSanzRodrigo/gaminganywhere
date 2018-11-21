@@ -71,6 +71,7 @@ extern "C" {
 #include <list>
 using namespace std;
 
+
 #ifndef NIPQUAD
 /** For printing IPv4 addresses: convert an unsigned int to 4 unsigned char. */
 #define NIPQUAD(x)	((unsigned char*)&(x))[0],	\
@@ -405,6 +406,13 @@ ga_init(const char *config, const char *url) {
 	}
 	/* Register RTSP de-multiplexer processor types */
 	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_live555_rtsp_dmux)!=
+			STAT_SUCCESS) {
+		ga_error("GA: Could not register processor type.\n");
+		return -1;
+	}
+
+	// [PAYLOADER UPM]
+	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_payloader_upm_rtsp_dmux)!=
 			STAT_SUCCESS) {
 		ga_error("GA: Could not register processor type.\n");
 		return -1;

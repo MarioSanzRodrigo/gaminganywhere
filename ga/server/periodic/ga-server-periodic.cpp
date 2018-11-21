@@ -28,22 +28,21 @@
 #include "encoder-common.h"
 
 /* Payloader UPM */
-#include <libpayloader/logger.h>
-#include <libpayloader/pevents.h>
-#include <libpayloader/Interfaces.h>
-#include <libpayloader/TcpServer.h>
-#include <libpayloader/TcpConnection.h>
-#include <libpayloader/RtpHeaders.h>
-#include <libpayloader/RtspReader.h>
-#include <libpayloader/RtpFragmenter.h>
-#include <libpayloader/Streamer.h>
-#include <libpayloader/Sender.h>
-#include <libpayloader/Packager.h>
-#include <libpayloader/Unpackager.h>
+#include <libmediaprocspayloader/logger.h>
+#include <libmediaprocspayloader/pevents.h>
+#include <libmediaprocspayloader/Interfaces.h>
+#include <libmediaprocspayloader/TcpServer.h>
+#include <libmediaprocspayloader/TcpConnection.h>
+#include <libmediaprocspayloader/RtpHeaders.h>
+#include <libmediaprocspayloader/RtspReader.h>
+#include <libmediaprocspayloader/RtpFragmenter.h>
+#include <libmediaprocspayloader/Streamer.h>
+#include <libmediaprocspayloader/Sender.h>
+#include <libmediaprocspayloader/Packager.h>
+#include <libmediaprocspayloader/Unpackager.h>
 
-
+extern "C"{
 /* MediaProcessors's library related */
-extern "C" {
 #include <mongoose.h> // HTTP-server facilities
 #include <libmediaprocs/procs_api_http.h> // HTTP-REST facilities
 #include <libmediaprocs/procs.h>
