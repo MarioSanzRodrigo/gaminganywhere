@@ -7,7 +7,7 @@ LDFLAGS	+= -rdynamic -L../../core -lga $(AVCLD) $(SDLLD) #-Wl,-rpath,\$$ORIGIN
 
 ifeq ($(OS), Linux)
 CFLAGS	+= $(ASNDCF) $(X11CF)
-LDFLAGS	+= $(ASNDLD) $(X11LD) -lboost_system
+LDFLAGS	+= $(ASNDLD) $(X11LD)
 endif
 
 ifeq ($(OS), Darwin)

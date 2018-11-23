@@ -1,5 +1,8 @@
 #!/bin/sh
-export MEDIAPROCSDIR=/home/mario/Documentos/Github_Test/0.INTEGRACION/FFMPEG-Control-API-Arqueopterix/_install_dir_x86
+cd ..
+aux=$(pwd)
+cd gaminganywhere
+export MEDIAPROCSDIR=$aux/_install_dir_x86
 export GADEPS=$MEDIAPROCSDIR
 export PKG_CONFIG_PATH=$GADEPS/lib/pkgconfig:/opt/local/lib/pkgconfig:/usr/lib/i386-linux-gnu/pkgconfig/:/usr/lib/pkgconfig
 export PATH=$GADEPS/bin:$PATH

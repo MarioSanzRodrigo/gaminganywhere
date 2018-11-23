@@ -28,7 +28,6 @@ extern "C" {
 #include <libmediaprocs/proc_if.h>
 #include <libmediaprocs/procs.h>
 #include <libmediaprocsmuxers/live555_rtsp.h>
-#include <libmediaprocsmuxers/payloader_upm_rtsp.h>
 #include <libmediaprocscodecs/ffmpeg_x264.h>
 #include <libmediaprocscodecs/ffmpeg_m2v.h>
 #include <libmediaprocscodecs/ffmpeg_mp3.h>
@@ -169,16 +168,6 @@ int rtsp_client_init(struct RTSPThreadParam *rtspThreadParam)
 	}
 
     /* Register RTSP de-multiplexer instance and get corresponding Id. */
-
-/* ############ [TODO INTEGRAR PAYLOADER UPM]
-
-	snprintf(proc_settings, sizeof(proc_settings), "rtsp_url=%s",
-			rtspThreadParam->url);
-	procs_post(procs_ctx, proc_if_payloader_upm_rtsp_mux.proc_name, proc_settings,
-			&rtspThreadParam->dmux_proc_id);
-
-*/
-
 	snprintf(proc_settings, sizeof(proc_settings), "rtsp_url=%s",
 			rtspThreadParam->url);
 	procs_post(procs_ctx, proc_if_live555_rtsp_dmux.proc_name, proc_settings,

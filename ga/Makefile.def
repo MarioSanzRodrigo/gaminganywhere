@@ -53,6 +53,6 @@ L5CF	= -I$(GADEPS)/include/live555
 L5LD	= -L$(GADEPS)/lib -lliveMedia -lBasicUsageEnvironment -lUsageEnvironment -lgroupsock
 
 # // { //RAL: Add MediaProcessors libs.
-AVCLD+= -L$(GADEPS)/lib -lx264 -luriparser -lcjson -lmediaprocsutils -lmediaprocs -lmediaprocspayloader -lmediaprocscodecs -lmediaprocsmuxers  -lSDL2 -lmongoose
+AVCLD+= -L$(GADEPS)/lib -lx264 -luriparser -lcjson -lmediaprocsutils -lmediaprocs -lmediaprocscodecs -lmediaprocsmuxers -lSDL2 -lmongoose
 CFLAGS+= -I$(GADEPS)/include
 # // } //RAL

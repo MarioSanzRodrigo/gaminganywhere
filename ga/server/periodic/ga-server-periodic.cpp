@@ -27,28 +27,12 @@
 #include "controller.h"
 #include "encoder-common.h"
 
-/* Payloader UPM */
-#include <libmediaprocspayloader/logger.h>
-#include <libmediaprocspayloader/pevents.h>
-#include <libmediaprocspayloader/Interfaces.h>
-#include <libmediaprocspayloader/TcpServer.h>
-#include <libmediaprocspayloader/TcpConnection.h>
-#include <libmediaprocspayloader/RtpHeaders.h>
-#include <libmediaprocspayloader/RtspReader.h>
-#include <libmediaprocspayloader/RtpFragmenter.h>
-#include <libmediaprocspayloader/Streamer.h>
-#include <libmediaprocspayloader/Sender.h>
-#include <libmediaprocspayloader/Packager.h>
-#include <libmediaprocspayloader/Unpackager.h>
-
-extern "C"{
 /* MediaProcessors's library related */
+extern "C" {
 #include <mongoose.h> // HTTP-server facilities
 #include <libmediaprocs/procs_api_http.h> // HTTP-REST facilities
 #include <libmediaprocs/procs.h>
 }
-
-namespace payloader {
 
 /**
  * HTTP-server data.
@@ -60,23 +44,6 @@ typedef struct http_server_thr_ctx_s {
 } http_server_thr_ctx_t;
 
 
-/* Funciones Payloader UPM
-
-typedef struct parametrosThread2{
-	int   Client;
-	fd_set descriptoresLectura;
-	neosmart_event_t  evento;
-}paramThread2;
-
-void timer_start(std::function<void(neosmart_event_t)> func, unsigned int interval,  neosmart_event_t event){
-	std::thread([func, interval, event]() {
-		while (true){
-			func(event);
-			std::this_thread::sleep_for(std::chrono::milliseconds(interval));
-		}
-	}).detach();
-}*/
-
 // configurations:
 static char *imagepipefmt= (char*)"video-%d";
 static char *filterpipefmt= (char*)"filter-%d";
@@ -87,19 +54,8 @@ static char *filter_param[]= { imagepipefmt, filterpipefmt };
 static struct gaRect *prect = NULL;
 static struct gaRect rect;
 
-/* [Payloader Live555] m_server for payloader live555
-   [Payloader UPM] m_server_2 for payloader upm */
-
-static ga_module_t *m_vsource, *m_filter, *m_vencoder, *m_asource, *m_aencoder, *m_ctrl, *m_server, *m_server_2;
+static ga_module_t *m_vsource, *m_filter, *m_vencoder, *m_asource, *m_aencoder, *m_ctrl, *m_server;
 static procs_ctx_t *procs_ctx= NULL;
-
-// [Payloader UPM]
-static rtsp_server_arg_t rtsp_server_2_arg= {
-		.rtsp_conf= NULL,
-		.procs_ctx= NULL,
-		.muxer_proc_id= -1
-};
-// [Payloader Live555]
 static rtsp_server_arg_t rtsp_server_arg= {
 		.rtsp_conf= NULL,
 		.procs_ctx= NULL,
@@ -145,10 +101,6 @@ load_modules() {
 	}
 	if((m_ctrl = ga_load_module("mod/ctrl-sdl", "sdlmsg_replay_")) == NULL)
 		return -1;
-	// [Payloader UPM]
-	if((m_server_2 = ga_load_module("mod/payloader-upm", "payloader_")) == NULL)
-		return -1;
-	// [Payloader Live555]
 	if((m_server = ga_load_module("mod/server-live555", "live_")) == NULL)
 		return -1;
 	return 0;
@@ -172,14 +124,7 @@ init_modules() {
 		exit(-1);
 	}
 
-	/* [PAYLOADER UPM] Initialize server module (before encoding modules) */
-	rtsp_server_2_arg.rtsp_conf= conf;
-	rtsp_server_2_arg.procs_ctx= procs_ctx;
-	rtsp_server_2_arg.muxer_proc_id= -1; // Initialize to invlid value
-	ga_init_single_module_or_quit("payloader-upm", m_server_2,
-			(void*)&rtsp_server_2_arg);
-
-	/* [PAYLOADER LIVE555] Initialize server module (before encoding modules) */
+	/* Initialize server module (before encoding modules) */
 	rtsp_server_arg.rtsp_conf= conf;
 	rtsp_server_arg.procs_ctx= procs_ctx;
 	rtsp_server_arg.muxer_proc_id= -1; // Initialize to invlid value
@@ -253,9 +198,7 @@ run_modules() {
 			exit(-1);
 		}
 	}
-	// [Payloader UPM] server 
-	if(m_server_2->start(NULL) < 0) exit(-1);
-	// [Payloader live555] server 
+	// server
 	if(m_server->start(NULL) < 0) exit(-1);
 	//
 	return 0;
@@ -469,6 +412,4 @@ int main(int argc, char *argv[])
 	//
 	return 0;
 }
-
-} //namespace
 
