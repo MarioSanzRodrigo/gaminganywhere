@@ -9,7 +9,7 @@ else
 LDFLAGS		= --sysroot=$(SYSROOT)
 endif
 
-MAKEMODULE	= $(CXX) -o $(TARGET) -shared $^ $(LDFLAGS)
+MAKEMODULE	= $(CXX) -o $(TARGET) -shared $^ $(LDFLAGS) -lboost_filesystem -lboost_thread -lboost_system
 
 ifeq ($(OS), Darwin)
 EXT		= dylib
