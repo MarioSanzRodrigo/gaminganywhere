@@ -3,7 +3,7 @@
 
 include Makefile.common
 
-TARGET	= asource-system vsource-desktop filter-rgb2yuv encoder-video encoder-audio ctrl-sdl server-live555
+TARGET	= asource-system vsource-desktop filter-rgb2yuv encoder-video encoder-audio ctrl-sdl server-live555 payloader-upm
 
 all:
 	for t in $(TARGET); do make -C $$t || exit 1; done

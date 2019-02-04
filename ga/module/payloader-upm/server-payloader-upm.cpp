@@ -1,9 +1,21 @@
+#include "server-payloader-upm.h"
+
 #include <stdio.h>
 #include <pthread.h>
 #include <unistd.h>
 
 #include "ga-module.h"
 #include "rtspconf.h"
+
+/* Payloader's library related */
+#include <libmediaprocspayloader/logger.h>
+#include <libmediaprocspayloader/Interfaces.h>
+#include <libmediaprocspayloader/TcpServer.h>
+#include <libmediaprocspayloader/TcpConnection.h>
+#include <libmediaprocspayloader/Packager.h>
+#include <libmediaprocspayloader/Sender.h>
+#include <libmediaprocspayloader/RtpFragmenter.h>
+#include <libmediaprocspayloader/RtpHeaders.h>
 
 /* MediaProcessors's library related */
 extern "C" {
@@ -20,6 +32,8 @@ static ga_module_t ga_module= {0};
 
 static int payloader_upm_server_init(void *arg)
 {
+printf("server-payloader init =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
+
 	char *p_stream_name;
 	int ret_code, end_code= -1;
 	rtsp_server_arg_t *rtsp_server_2_arg= (rtsp_server_arg_t*)arg;
@@ -43,20 +57,24 @@ static int payloader_upm_server_init(void *arg)
 		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
 		return -1;
 	}
-
+printf("server-payloader init =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
 	/* Compose server initial settings */
 	p_stream_name= rtspconf->object;
-	if(p_stream_name!= NULL && strlen(p_stream_name+ 1)> 0)
+	if(p_stream_name!= NULL && strlen(p_stream_name+ 1)> 0){
 		p_stream_name+= 1;
-	else
+printf("server-payloader init =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
+	}else
 		p_stream_name= (char*)"ga";
 	snprintf(proc_settings, sizeof(proc_settings), "rtsp_port=%d"
 			"&rtsp_streaming_session_name=%s",
 			rtspconf->serverport> 0? rtspconf->serverport: 8554, p_stream_name);
 
 	/* Register RTSP multiplexer in PROCS module */
+printf("server-payloader init =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
 	ret_code= procs_opt(procs_ctx, "PROCS_POST", "payloader_upm_rtsp_mux",
 			proc_settings, &rest_str);
+printf("server-payloader init =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
+printf("[server-payloader init] ret code es: %d\n", ret_code);
 	if(ret_code!= STAT_SUCCESS || rest_str== NULL) {
 		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
 		goto end;
@@ -66,14 +84,17 @@ static int payloader_upm_server_init(void *arg)
 		goto end;
 	}
 	if((cjson_rest= cJSON_Parse(rest_str))== NULL) {
+printf("server-payloader init =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
 		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
 		goto end;
 	}
 	if((cjson_aux= cJSON_GetObjectItem(cjson_rest, "proc_id"))== NULL) {
+printf("server-payloader init =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
 		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
 		goto end;
 	}
 	if((rtsp_server_2_arg->muxer_proc_id= cjson_aux->valuedouble)< 0) {
+printf("server-payloader init =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
 		ga_error("'%s' failed. Line %d\n", __FUNCTION__, __LINE__);
 		goto end;
 	}
@@ -82,6 +103,8 @@ static int payloader_upm_server_init(void *arg)
 
 	end_code= 0; // "SUCCESS"
 end:
+printf("server-payloader init =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
+printf(" @@@@@ el end_code es: %d\n", end_code);
 	if(cjson_rest!= NULL)
 		cJSON_Delete(cjson_rest);
 	if(rest_str!= NULL)
@@ -93,11 +116,15 @@ end:
 
 static int payloader_upm_server_start(void *arg)
 {
+printf("[server-payloader-upm.cpp] START =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
+//	payloader::TcpServer* server =  new payloader::TcpServer();
+
 	return 0;
 }
 
 static int payloader_upm_server_stop(void *arg)
 {
+printf("[server-payloader-upm.cpp] STOP =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
 	return 0;
 }
 

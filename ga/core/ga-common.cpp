@@ -404,7 +404,8 @@ ga_init(const char *config, const char *url) {
 		ga_error("GA: Could not register processor type.\n");
 		return -1;
 	}
-	/* Register RTSP de-multiplexer processor types */
+/*
+	// Register RTSP de-multiplexer processor types //
 	if(procs_module_opt("PROCS_REGISTER_TYPE", &proc_if_live555_rtsp_dmux)!=
 			STAT_SUCCESS) {
 		ga_error("GA: Could not register processor type.\n");
@@ -417,6 +418,7 @@ ga_init(const char *config, const char *url) {
 		ga_error("GA: Could not register processor type.\n");
 		return -1;
 	}
+*/
 #endif
 	if(config != NULL) {
 		if(ga_conf_load(config) < 0) {

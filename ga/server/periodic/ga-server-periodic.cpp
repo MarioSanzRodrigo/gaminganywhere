@@ -54,13 +54,20 @@ static char *filter_param[]= { imagepipefmt, filterpipefmt };
 static struct gaRect *prect = NULL;
 static struct gaRect rect;
 
-static ga_module_t *m_vsource, *m_filter, *m_vencoder, *m_asource, *m_aencoder, *m_ctrl, *m_server;
+static ga_module_t *m_vsource, *m_filter, *m_vencoder, *m_asource, *m_aencoder, *m_ctrl, *m_server, *m_upm_server;
 static procs_ctx_t *procs_ctx= NULL;
 static rtsp_server_arg_t rtsp_server_arg= {
 		.rtsp_conf= NULL,
 		.procs_ctx= NULL,
 		.muxer_proc_id= -1
 };
+//@Mario - Payloader UPM
+static rtsp_server_arg_t rtsp_server_upm_arg= {
+		.rtsp_conf= NULL,
+		.procs_ctx= NULL,
+		.muxer_proc_id= -1
+};
+//
 static vencoder_arg_t vencoder_arg= {
 		.rtsp_conf= NULL,
 		.mime= NULL,
@@ -101,8 +108,16 @@ load_modules() {
 	}
 	if((m_ctrl = ga_load_module("mod/ctrl-sdl", "sdlmsg_replay_")) == NULL)
 		return -1;
+
 	if((m_server = ga_load_module("mod/server-live555", "live_")) == NULL)
 		return -1;
+
+
+//@Mario - Payloader
+
+	if((m_upm_server = ga_load_module("mod/server-payloader-upm", "payloader_")) == NULL)
+		return -1;
+
 	return 0;
 }
 
@@ -125,11 +140,24 @@ init_modules() {
 	}
 
 	/* Initialize server module (before encoding modules) */
+
 	rtsp_server_arg.rtsp_conf= conf;
 	rtsp_server_arg.procs_ctx= procs_ctx;
 	rtsp_server_arg.muxer_proc_id= -1; // Initialize to invlid value
 	ga_init_single_module_or_quit("server-live555", m_server,
 			(void*)&rtsp_server_arg);
+
+
+printf("ga-server =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
+
+//@Mario - Payloader
+
+	rtsp_server_upm_arg.rtsp_conf= conf;
+	rtsp_server_upm_arg.procs_ctx= procs_ctx;
+	rtsp_server_upm_arg.muxer_proc_id= -1;
+	ga_init_single_module_or_quit("server-payloader-upm", m_upm_server, 				(void*)&rtsp_server_upm_arg);
+
+printf("ga-server =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
 
 	/* Initialize video encoders */
 	vencoder_arg.rtsp_conf= conf;
@@ -137,9 +165,15 @@ init_modules() {
 			strdup(m_vencoder->mimetype): (char*)"video/NONE";
 	vencoder_arg.pipefmt= filterpipefmt;
 	vencoder_arg.procs_ctx= procs_ctx;
-	vencoder_arg.muxer_proc_id= rtsp_server_arg.muxer_proc_id;
+	//live555 	
+	//vencoder_arg.muxer_proc_id= rtsp_server_arg.muxer_proc_id;
+	//payloader_upm 
+	vencoder_arg.muxer_proc_id= rtsp_server_upm_arg.muxer_proc_id;
+printf(" el vencoder_arg.muxer_proc_id es: %d", vencoder_arg.muxer_proc_id);
+printf("ga-server =====================%d\n\n", __LINE__); fflush(stdout); //FIXME!!
 	ga_init_single_module_or_quit("video-encoder", m_vencoder,
 			(void*)&vencoder_arg);
+printf("ga-server =====================%d\n", __LINE__); fflush(stdout); //FIXME!!
 
 	/* Initialize audio encoders */
 	if(ga_conf_readbool("enable-audio", 1) != 0) {
@@ -147,7 +181,11 @@ init_modules() {
 		aencoder_arg.mime= (m_aencoder->mimetype!= NULL)?
 				strdup(m_aencoder->mimetype): (char*)"audio/NONE";
 		aencoder_arg.procs_ctx= procs_ctx;
-		aencoder_arg.muxer_proc_id= rtsp_server_arg.muxer_proc_id;
+		//live555
+		//aencoder_arg.muxer_proc_id= rtsp_server_arg.muxer_proc_id;
+		//payloader_upm
+		aencoder_arg.muxer_proc_id= rtsp_server_upm_arg.muxer_proc_id;
+
 #ifndef __APPLE__
 		ga_init_single_module_or_quit("audio-source", m_asource, NULL);
 #endif
@@ -198,9 +236,18 @@ run_modules() {
 			exit(-1);
 		}
 	}
+
 	// server
 	if(m_server->start(NULL) < 0) exit(-1);
 	//
+
+
+//Mario - Payloader
+
+	// server 2
+	if(m_upm_server->start(NULL) < 0) exit(-1);
+	//
+
 	return 0;
 }
 
