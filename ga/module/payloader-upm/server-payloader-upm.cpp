@@ -10,12 +10,15 @@
 /* Payloader's library related */
 #include <libmediaprocspayloader/logger.h>
 #include <libmediaprocspayloader/Interfaces.h>
-#include <libmediaprocspayloader/TcpServer.h>
-#include <libmediaprocspayloader/TcpConnection.h>
-#include <libmediaprocspayloader/Packager.h>
-#include <libmediaprocspayloader/Sender.h>
-#include <libmediaprocspayloader/RtpFragmenter.h>
-#include <libmediaprocspayloader/RtpHeaders.h>
+//#include <libmediaprocspayloader/TcpServer.h>
+//#include "../../../../_install_dir_x86/include/libmediaprocspayloader/logger.h"
+//#include "../../../../_install_dir_x86/include/libmediaprocspayloader/Interfaces.h"
+//#include "../../../../_install_dir_x86/include/libmediaprocspayloader/TcpServer.h"
+//#include "../../../../_install_dir_x86/include/libmediaprocspayloader/TcpConnection.h"
+//#include "../../../../_install_dir_x86/include/libmediaprocspayloader/Packager.h"
+//#include "../../../../_install_dir_x86/include/libmediaprocspayloader/Sender.h"
+//#include "../../../../_install_dir_x86/include/libmediaprocspayloader/RtpFragmenter.h"
+//#include "../../../../_install_dir_x86/include/libmediaprocspayloader/RtpHeaders.h"
 
 /* MediaProcessors's library related */
 extern "C" {
