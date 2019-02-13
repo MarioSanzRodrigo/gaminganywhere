@@ -23,6 +23,6 @@ endif
 	$(CXX) -c -g $(CFLAGS) $<
 
 # // { //RAL: Add MediaProcessors libs.
-AVCLD+= -L$(GADEPS)/lib -lx264 -luriparser -lcjson -lmediaprocsutils -lmediaprocs -lmediaprocscodecs -lmediaprocsmuxers
+AVCLD+= -L$(GADEPS)/lib -lx264 -luriparser -lcjson -lmediaprocsutils -lmediaprocs -lmediaprocscodecs -lmediaprocsmuxers -lmediaprocspayloader
 CFLAGS+= -I$(GADEPS)/include
 # // } //RAL

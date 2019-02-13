@@ -3,7 +3,7 @@ include ../Makefile.def
 
 CFLAGS	+= -I../../core $(AVCCF) $(L5CF) $(SDLCF)
 #LDFLAGS	= -rdynamic -L../../core -Wl,--whole-archive -lga -Wl,--no-whole-archive $(AVCLD) $(SDLLD)
-LDFLAGS	+= -rdynamic -L../../core -lga $(AVCLD) $(SDLLD) #-Wl,-rpath,\$$ORIGIN
+LDFLAGS	+= -rdynamic -L../../core -lga $(AVCLD) $(SDLLD) -lboost_filesystem -lboost_thread -lboost_system -llog4cxx #-Wl,-rpath,\$$ORIGIN
 
 ifeq ($(OS), Linux)
 CFLAGS	+= $(ASNDCF) $(X11CF)

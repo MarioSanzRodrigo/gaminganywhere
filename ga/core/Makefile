@@ -28,13 +28,15 @@ all: $(TARGET)
 OBJS =	ga-common.o ga-conf.o ga-confvar.o ga-module.o ga-avcodec.o \
 	rtspconf.o dpipe.o vconverter.o \
 	vsource.o asource.o encoder-common.o \
-	controller.o ctrl-msg.o
+	controller.o ctrl-msg.o \ TcpServer.o Streamer.o TcpConnection.o\
+	Packager.o \ pevents.o \ Receiver.o \ RtpFragmenter.o \
+	Sender.o \ Unpackager.o
 
 libga.a: $(OBJS)
 	$(AR) rc $@ $^
 
 libga$(SO_EXT): $(OBJS)
-	$(CXX) -shared -o $@ $^ $(LDFLAGS)
+	$(CXX) -shared -o $@ $^ $(LDFLAGS) -lboost_filesystem -lboost_thread -lboost_system -llog4cxx
 
 install:
 	cp -f libga$(SO_EXT) ../../bin/
